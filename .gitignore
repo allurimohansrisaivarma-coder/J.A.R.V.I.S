@@ -56,3 +56,12 @@ token.json
 
 # Config
 /config/*.yaml
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
+# OS specific
+.DS_Store
+Thumbs.db

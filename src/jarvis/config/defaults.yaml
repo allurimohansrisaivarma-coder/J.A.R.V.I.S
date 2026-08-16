@@ -1,0 +1,41 @@
+# Internal Jarvis defaults
+
+llm:
+  default_provider: gemini
+  gemini:
+    model_flash: gemini-3.5-flash
+    model_pro: gemini-3.5-flash
+    temperature: 0.7
+    max_output_tokens: 2048
+  groq:
+    model: llama-3.1-8b-instant
+    temperature: 0.3
+    max_output_tokens: 1024
+
+router:
+  complexity_threshold: 0.8
+  fast_keywords: ["hi", "hello", "thanks", "yes", "no", "ok"]
+
+voice:
+  enabled: true
+  push_to_talk_key: ctrl+shift+j
+  auto_detect: false
+  tts_voice: en-GB-RyanNeural
+  tts_rate: "+20%"
+  tts_pitch: "-5Hz"
+  silence_duration: 0.55
+
+memory:
+  enabled: false
+  data_dir: ./data
+  exclude_patterns: ["password", "secret", "token", "*.env"]
+
+logging:
+  level: INFO
+  format: console
+  file: ./logs/jarvis.log
+  max_size_mb: 10
+  backup_count: 5
+
+system:
+  port: 8741

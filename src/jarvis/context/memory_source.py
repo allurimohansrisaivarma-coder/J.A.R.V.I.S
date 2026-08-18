@@ -1,6 +1,7 @@
 """Memory context source."""
 
 import structlog
+
 from jarvis.context.base import ContextSource
 from jarvis.memory.manager import MemoryManager
 
@@ -20,19 +21,51 @@ class MemoryContextSource(ContextSource):
         """Memory is almost always relevant, but we only query if the memory system is online."""
         return self.memory is not None
         
-    async def gather_context(self, query: str) -> str:
+    async def gather_context(self, query: str, **kwargs) -> str:
         if not self.memory:
             return ""
             
+        search_query = query
+        router = kwargs.get("router")
+        
+        if router:
+            from jarvis.llm.base import Message, ModelTier
+            try:
+                expansion = await router.generate_with_fallback(
+                    [Message.user(
+                        "You are a search query optimizer. The user is asking a question or making a statement. "
+                        "Rewrite it into 1-2 concise declarative statements representing the facts the user is asking about or storing, to optimize for vector database retrieval. "
+                        "Output ONLY the optimized search string without quotes or preamble.\n\n"
+                        f"User: {query}"
+                    )],
+                    target_tier=ModelTier.FAST
+                )
+                expanded = expansion.content.strip().strip('"\'')
+                if expanded:
+                    search_query = expanded
+                    logger.debug("Query expanded for memory search", original=query, expanded=search_query)
+            except Exception as e:
+                logger.warning("Query expansion failed", error=str(e))
+                
         try:
-            results = self.memory.semantic_search(query, limit=5)
-            # Filter results by a reasonable distance threshold (e.g. < 0.7 for cosine distance)
-            relevant = [r for r in results if r["distance"] < 0.7]
+            results = self.memory.semantic_search(search_query, limit=50)
+            # Filter results by a reasonable distance threshold (L2 distance up to ~1.414 is orthogonal, but conversational queries can be distant)
+            relevant = [r for r in results if r["distance"] < 1.5]
             
             if not relevant:
                 return ""
                 
-            formatted = "\n".join([f"- {r['content']}" for r in relevant])
+            unique_facts = []
+            seen = set()
+            for r in relevant:
+                text = r['content'].strip()
+                if text.lower() not in seen:
+                    seen.add(text.lower())
+                    unique_facts.append(f"- {text}")
+                    if len(unique_facts) >= 20:
+                        break
+                        
+            formatted = "\n".join(unique_facts)
             return f"Relevant memories about the user or past conversations:\n{formatted}"
         except Exception as e:
             logger.error("Failed to gather memory context", error=str(e))

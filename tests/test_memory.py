@@ -11,9 +11,9 @@ from jarvis.memory.embeddings import Embedder
 @pytest.fixture
 def mock_embedder():
     embedder = MagicMock(spec=Embedder)
-    # Return a 768-dimensional mock vector
-    embedder.embed_text.return_value = [0.1] * 768
-    embedder.embed_query.return_value = [0.1] * 768
+    # Return a 384-dimensional mock vector
+    embedder.embed_text.return_value = [0.1] * 384
+    embedder.embed_query.return_value = [0.1] * 384
     return embedder
 
 @pytest.fixture

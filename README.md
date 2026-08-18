@@ -14,7 +14,7 @@ A full-featured Windows desktop AI assistant with real-time voice conversations,
 | **Live TTS Pipeline** | 3-stage async pipeline (buffer → download → play) begins with a short natural phrase and shows each phrase as its audio starts |
 | **Screen Understanding** | Ask "what's on my screen?" and JARVIS captures + analyzes your display via Gemini Vision |
 | **File Access** | JARVIS can see and read files from your Desktop, Documents, and Downloads folders |
-| **Long-Term Memory** | LanceDB vector store + SQLite metadata for persistent conversational memory across sessions |
+| **Long-Term Memory** | LanceDB vector store + SQLite metadata for persistent conversational memory across sessions, powered by semantic HyDE query expansion |
 | **Google Calendar** | Read upcoming events and create new ones (requires OAuth setup — see below) |
 | **Smart Model Router** | Intent-based routing across Gemini Flash, Gemini Pro, and Groq Llama for cost-optimal inference |
 | **Web Search** | Automatic DuckDuckGo search for real-time information when needed |
@@ -93,7 +93,7 @@ src/jarvis/
 │   ├── embeddings.py         # Text embeddings via Gemini embedding API
 │   └── __init__.py           # SQLite schema init
 ├── tools/
-│   └── calendar.py           # Google Calendar OAuth + read/create events
+│   └── calendar_tool.py      # Google Calendar OAuth + read/create events
 ├── ui/
 │   ├── app.py                # pywebview window + JarvisAPI bridge
 │   ├── server.py             # WebSocket server (bridges frontend ↔ backend)

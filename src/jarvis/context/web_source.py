@@ -1,8 +1,10 @@
 """Web search context source."""
 
 import asyncio
+
 import structlog
 from ddgs import DDGS
+
 from jarvis.context.base import ContextSource
 
 logger = structlog.get_logger(__name__)
@@ -40,7 +42,7 @@ class WebContextSource(ContextSource):
         
         return is_question or is_factual or explicit_search
         
-    async def gather_context(self, query: str) -> str:
+    async def gather_context(self, query: str, **kwargs) -> str:
         logger.info("Executing web search", query=query)
         
         try:

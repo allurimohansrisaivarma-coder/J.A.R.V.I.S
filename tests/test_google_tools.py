@@ -6,7 +6,7 @@ from email import message_from_bytes
 import pytest
 
 from jarvis.core.session import SessionManager
-from jarvis.tools.calendar import CalendarOperationError, GoogleCalendarTool
+from jarvis.tools.calendar_tool import CalendarOperationError, GoogleCalendarTool
 from jarvis.tools.gmail import SCOPES, GmailOperationError, GoogleGmailTool
 
 

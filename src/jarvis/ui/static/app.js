@@ -29,6 +29,7 @@ const settingSilence  = document.getElementById("setting-silence");
 const settingVoice    = document.getElementById("setting-voice");
 const settingRate     = document.getElementById("setting-rate");
 const minimizeBtn     = document.getElementById("minimize-btn");
+const closeBtn        = document.getElementById("close-btn");
 
 
 // ========================================
@@ -118,6 +119,27 @@ function handleMessage(data) {
 function updateCoreState(stateStr) {
     aiCore.className = `ai-core ${stateStr}`;
     coreStatusText.innerText = stateStr;
+    
+    if (stateStr === "RECORDING" || stateStr === "LISTENING") {
+        micBtn.classList.add("active");
+        micBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor"
+             stroke-width="2" fill="currentColor" stroke-linecap="round"
+             stroke-linejoin="round">
+            <rect x="6" y="6" width="12" height="12"></rect>
+        </svg>`;
+    } else {
+        micBtn.classList.remove("active");
+        micBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor"
+             stroke-width="2" fill="none" stroke-linecap="round"
+             stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            <line x1="12" y1="19" x2="12" y2="23"></line>
+            <line x1="8" y1="23" x2="16" y2="23"></line>
+        </svg>`;
+    }
 }
 
 
@@ -250,12 +272,18 @@ minimizeBtn.addEventListener("click", () => {
     }
 });
 
-aiCore.addEventListener("click", () => {
+aiCore.addEventListener("dblclick", () => {
     if (!isWidgetMode) return;
     isWidgetMode = false;
     document.body.classList.remove("widget-mode");
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.expand_to_window();
+    }
+});
+
+closeBtn.addEventListener("click", () => {
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.close_app();
     }
 });
 

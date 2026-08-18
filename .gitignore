@@ -62,6 +62,12 @@ token.json
 coverage.xml
 htmlcov/
 
+# Jarvis Specific
+*.spec
+*.wav
+.jarvis/
+.gemini/
+
 # OS specific
 .DS_Store
 Thumbs.db

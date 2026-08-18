@@ -1,8 +1,7 @@
 """Model routing layer."""
 
-import asyncio
 import time
-from typing import AsyncIterator, Dict
+from collections.abc import AsyncIterator
 
 import structlog
 
@@ -14,18 +13,20 @@ from jarvis.llm.base import (
     Message,
     ModelTier,
 )
+from jarvis.utils.metrics import metrics
 
 logger = structlog.get_logger(__name__)
 
 class ModelRouter:
     """Routes LLM requests to appropriate models based on intent and load."""
 
-    def __init__(self, providers: Dict[ModelTier, LLMProvider], settings: RouterSettings):
+    def __init__(self, providers: dict[ModelTier, LLMProvider], settings: RouterSettings):
         """Initialize the router."""
         self.providers = providers
         self.settings = settings
         # Track provider failures (dict of tier to list of failure timestamps)
-        self._provider_failures: Dict[ModelTier, list[float]] = {tier: [] for tier in ModelTier}
+        self._provider_failures: dict[ModelTier, list[float]] = {tier: [] for tier in ModelTier}
+        self._provider_ttft: dict[ModelTier, list[float]] = {tier: [] for tier in ModelTier}
         
     async def _classify_intent(self, messages: list[Message]) -> ModelTier:
         """Classify the complexity of the query to select the optimal model tier."""
@@ -84,7 +85,24 @@ class ModelRouter:
         self._provider_failures[tier] = recent_failures
         
         # If 3 or more failures in last 5 minutes, consider unhealthy
-        return len(recent_failures) < 3
+        if len(recent_failures) >= 3:
+            return False
+            
+        # Check TTFT (Time To First Token) degradation
+        recent_ttft = [t for t in self._provider_ttft[tier][-5:]]
+        if len(recent_ttft) >= 3:
+            avg_ttft = sum(recent_ttft) / len(recent_ttft)
+            if avg_ttft > 4.0:  # 4 seconds is heavily degraded
+                logger.warning("router.provider_degraded", tier=tier.value, avg_ttft=avg_ttft)
+                return False
+                
+        return True
+
+    def _record_ttft(self, tier: ModelTier, ttft_s: float):
+        """Record TTFT for a provider."""
+        self._provider_ttft[tier].append(ttft_s)
+        # Keep only the last 10 entries to avoid memory leak
+        self._provider_ttft[tier] = self._provider_ttft[tier][-10:]
 
     def _record_failure(self, tier: ModelTier):
         """Record a failure for a provider."""
@@ -113,9 +131,10 @@ class ModelRouter:
         provider = self.providers[target_tier]
         return await provider.generate(messages, **kwargs)
 
-    async def route_stream(self, messages: list[Message], **kwargs) -> AsyncIterator[str]:
+    async def route_stream(self, messages: list[Message], target_tier: ModelTier | None = None, **kwargs) -> AsyncIterator[str]:
         """Route and stream the response with fallback on error."""
-        target_tier = await self._classify_intent(messages)
+        if target_tier is None:
+            target_tier = await self._classify_intent(messages)
         
         tiers_to_try = [target_tier]
         fallback = self._get_fallback_tier(target_tier)
@@ -139,17 +158,25 @@ class ModelRouter:
                 continue
                 
             provider = self.providers[tier]
-            logger.info("router.attempting_stream", tier=tier.value, provider=provider.name)
+            model_name = getattr(provider, 'model', 'unknown')
+            logger.info("router.attempting_stream", tier=tier.value, provider=provider.name, model=model_name)
             
             try:
                 stream_iter = provider.stream(messages, **kwargs)
                 chunk_yielded = False
+                ttft_start = time.perf_counter()
                 async for chunk in stream_iter:
+                    if not chunk_yielded:
+                        ttft = time.perf_counter() - ttft_start
+                        metrics.record_ttft(ttft)
+                        self._record_ttft(tier, ttft)
+                        logger.info("router.stream_success", tier=tier.value, provider=provider.name, model=model_name, ttft=round(ttft, 3))
                     chunk_yielded = True
                     yield chunk
                 return  # Success
             except Exception as e:
-                logger.error("router.stream_failed", tier=tier.value, error=str(e))
+                http_status = getattr(e, "status_code", getattr(e, "status", "unknown"))
+                logger.warning("router.stream_fallback", tier=tier.value, provider=provider.name, model=model_name, reason=str(e), http_status=http_status)
                 self._record_failure(tier)
                 last_error = e
                 if chunk_yielded:
@@ -161,9 +188,10 @@ class ModelRouter:
                 
         raise LLMError(f"All providers failed to stream. Last error: {last_error}")
 
-    async def generate_with_fallback(self, messages: list[Message], **kwargs) -> LLMResponse:
+    async def generate_with_fallback(self, messages: list[Message], target_tier: ModelTier | None = None, **kwargs) -> LLMResponse:
         """Try primary tier, fall back to next tier on error."""
-        target_tier = await self._classify_intent(messages)
+        if target_tier is None:
+            target_tier = await self._classify_intent(messages)
         
         tiers_to_try = [target_tier]
         fallback = self._get_fallback_tier(target_tier)
@@ -188,13 +216,18 @@ class ModelRouter:
                 continue
                 
             provider = self.providers[tier]
-            logger.info("router.attempting_generation", tier=tier.value, provider=provider.name)
+            model_name = getattr(provider, 'model', 'unknown')
+            logger.info("router.attempting_generate", tier=tier.value, provider=provider.name, model=model_name)
             
             try:
+                start_time = time.perf_counter()
                 response = await provider.generate(messages, **kwargs)
+                latency_s = time.perf_counter() - start_time
+                logger.info("router.generate_success", tier=tier.value, provider=provider.name, model=model_name, latency_s=round(latency_s, 3))
                 return response
             except Exception as e:
-                logger.error("router.generation_failed", tier=tier.value, error=str(e))
+                http_status = getattr(e, "status_code", getattr(e, "status", "unknown"))
+                logger.warning("router.generate_fallback", tier=tier.value, provider=provider.name, model=model_name, reason=str(e), http_status=http_status)
                 self._record_failure(tier)
                 last_error = e
                 

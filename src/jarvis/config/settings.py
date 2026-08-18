@@ -1,15 +1,12 @@
 """Application settings and configuration management."""
 
-import os
+import sys
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-import sys
 
 if getattr(sys, 'frozen', False):
     BUNDLE_DIR = Path(sys._MEIPASS)
@@ -31,7 +28,7 @@ class GeminiSettings(BaseModel):
 
 class GroqSettings(BaseModel):
     """Settings for Groq inference."""
-    model: str = "llama-3.1-8b-instant"
+    model: str = "openai/gpt-oss-20b"
     temperature: float = 0.3
     max_output_tokens: int = 1024
 
@@ -157,7 +154,7 @@ class Settings(BaseSettings):
             yaml_data["groq_api_key"] = "fallback"
             return cls(**yaml_data)
 
-    def save_to_yaml(self, path: Path = None) -> None:
+    def save_to_yaml(self, path: Path | None = None) -> None:
         """Save current settings to a YAML file."""
         if path is None:
             path = PROJECT_ROOT / "config" / "jarvis.yaml"
@@ -178,7 +175,7 @@ class Settings(BaseSettings):
             yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
 
 
-@lru_cache()
+@lru_cache
 def get_settings() -> Settings:
     """Get the cached settings singleton.
     

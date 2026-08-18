@@ -1,8 +1,8 @@
 """Global hotkey listener for push-to-talk control."""
 
 import asyncio
+
 import structlog
-from typing import Callable
 
 logger = structlog.get_logger(__name__)
 
@@ -74,6 +74,12 @@ class HotkeyListener:
                 keyboard.Key.f12: 'f12',
             }
             return key_map.get(key)
+        elif hasattr(key, 'vk') and key.vk is not None:
+            # Prioritize vk because holding Ctrl can change key.char to a control character (e.g. \\x0a for J)
+            if 65 <= key.vk <= 90 or 97 <= key.vk <= 122:
+                return chr(key.vk).lower()
+            elif hasattr(key, 'char') and key.char:
+                return key.char.lower()
         elif hasattr(key, 'char') and key.char:
             return key.char.lower()
         return None

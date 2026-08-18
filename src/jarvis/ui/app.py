@@ -1,8 +1,9 @@
 """JARVIS Desktop UI — pywebview window with WebSocket bridge."""
 
-import threading
 import asyncio
+import threading
 from pathlib import Path
+
 import structlog
 
 from jarvis.ui.server import WebSocketServer
@@ -16,29 +17,8 @@ class JarvisAPI:
     def __init__(self, session_manager, server_loop=None, server=None):
         self._session_manager = session_manager
         self._window = None
-        self._voice_active = False
         self._loop = server_loop
         self._server = server
-
-    def send_message(self, text: str):
-        """Send a chat message (routed via WebSocket instead)."""
-        logger.info("Message received via API", text=text)
-
-    def toggle_voice(self):
-        """Toggle voice listening on/off."""
-        self._voice_active = not self._voice_active
-        state = "LISTENING" if self._voice_active else "IDLE"
-        logger.info("Voice toggled via API", state=state)
-        if self._server and self._loop:
-            asyncio.run_coroutine_threadsafe(
-                self._server.broadcast_state(state),
-                self._loop
-            )
-        return self._voice_active
-
-    def get_status(self) -> dict:
-        """Return current system status."""
-        return {"status": "OK", "voice_active": self._voice_active}
 
     def minimize_to_tray(self):
         """Minimize the window."""
@@ -54,6 +34,11 @@ class JarvisAPI:
         """Expand the window to full UI size."""
         if self._window:
             self._window.resize(420, 650)
+
+    def close_app(self):
+        """Close the application cleanly."""
+        if self._window:
+            self._window.destroy()
 
 
 def _run_server(server, loop):
@@ -117,8 +102,7 @@ def launch_ui(session_manager, voice_manager=None):
         height=650,
         frameless=True,
         on_top=True,
-        transparent=False,
-        background_color='#05080f'
+        transparent=True
     )
     api._window = window
 
@@ -140,12 +124,16 @@ def launch_ui(session_manager, voice_manager=None):
         except ImportError:
             logger.warning("pynput not installed, global push-to-talk disabled")
 
-    # Startup TTS Greeting
+    # Startup TTS Greeting (Slightly delayed to ensure audio init)
     if voice_manager:
-        asyncio.run_coroutine_threadsafe(voice_manager.tts.speak("System Starting"), server_loop)
+        async def delayed_greeting():
+            await asyncio.sleep(0.5)
+            await voice_manager.tts.speak("Systems loading. I am online and ready for your commands.")
+        
+        asyncio.run_coroutine_threadsafe(delayed_greeting(), server_loop)
 
     # webview.start() blocks until the window is closed
-    webview.start(gui='edgechromium', icon=str(icon_path.absolute()), debug=True)
+    webview.start(gui='edgechromium', icon=str(icon_path.absolute()), debug=False)
     
     # Cleanup
     server_loop.call_soon_threadsafe(server_loop.stop)

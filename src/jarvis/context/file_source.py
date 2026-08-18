@@ -1,8 +1,10 @@
 """Local file context source — full desktop access."""
 
-from pathlib import Path
 import re
+from pathlib import Path
+
 import structlog
+
 from jarvis.context.base import ContextSource
 
 logger = structlog.get_logger(__name__)
@@ -16,6 +18,8 @@ ALLOWED_ROOTS = [
     USER_HOME / "OneDrive" / "Desktop",
     USER_HOME / "OneDrive" / "Documents",
     USER_HOME / "JarvisWorkspace",
+    Path("C:/Users/allur_we/OneDrive/Desktop/Projects/PERSONAL/JARVIS"), # Source code
+    Path("C:/Users/allur_we/.gemini/antigravity-ide/brain"), # Logs / Antigravity data
 ]
 
 # File extensions we can safely read as text
@@ -44,10 +48,11 @@ class FileContextSource(ContextSource):
         triggers = [
             "file", "folder", "directory", "desktop", "document", "download",
             "read", "open", "list", "show me", "what's on", "what is on",
+            "code", "repo", "architecture", "log", "capabilities", "readme",
         ]
         return any(t in q for t in triggers) or "\\" in query or "/" in query
 
-    async def gather_context(self, query: str) -> str:
+    async def gather_context(self, query: str, **kwargs) -> str:
         q = query.lower()
 
         # 1. Check if query contains an explicit absolute path
@@ -89,6 +94,7 @@ class FileContextSource(ContextSource):
             and term not in {
                 "can", "you", "the", "where", "have", "file", "saved", "save", "desktop",
                 "please", "what", "which", "with", "from", "that", "this", "there", "my", "is",
+                "read", "open", "show", "me", "log", "code", "architecture"
             }
         }
         mentioned = []
@@ -96,6 +102,11 @@ class FileContextSource(ContextSource):
             normalised_name = re.sub(r"[^a-z0-9]", "", file_path.stem.lower())
             if any(term in normalised_name for term in query_terms):
                 mentioned.append(file_path)
+
+        if "capabilities" in q or "readme" in q:
+            readme_path = Path("C:/Users/allur_we/OneDrive/Desktop/Projects/PERSONAL/JARVIS/README.md")
+            if readme_path.exists() and readme_path not in mentioned:
+                mentioned.append(readme_path)
 
         if mentioned:
             matches = "\n".join(self._describe_file(file_path) for file_path in mentioned[:5])

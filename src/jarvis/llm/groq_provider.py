@@ -1,10 +1,13 @@
 """Groq provider implementation."""
 
 import asyncio
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import structlog
-from groq import AsyncGroq, RateLimitError as GroqRateLimitError, AuthenticationError as GroqAuthError, APIStatusError
+from groq import APIStatusError, AsyncGroq
+from groq import AuthenticationError as GroqAuthError
+from groq import RateLimitError as GroqRateLimitError
 
 from jarvis.llm.base import (
     AuthenticationError,
@@ -50,16 +53,28 @@ class GroqProvider(LLMProvider):
         """Convert standard messages to Groq/OpenAI format."""
         formatted = []
         
+        # Groq Llama models sometimes hallucinate tool calls when there are none, causing API crashes.
+        # We enforce a strict plain text rule.
+        anti_tool_instruction = "\nCRITICAL SYSTEM INSTRUCTION: DO NOT output any function calls, tool calls, or raw JSON. Respond ONLY in conversational plain text."
+        
         if system_prompt:
-            formatted.append({"role": "system", "content": system_prompt})
+            formatted.append({"role": "system", "content": system_prompt + anti_tool_instruction})
+        else:
+            formatted.append({"role": "system", "content": anti_tool_instruction})
             
         for msg in messages:
+            role = msg.role
+            # Groq will complain if we use 'tool' or 'function' without tools provided
+            # or if the roles are non-standard.
+            if role not in ("system", "user", "assistant"):
+                role = "user"
+
             if isinstance(msg.content, list):
                 # Extract only text parts, ignore images
                 text_parts = [item for item in msg.content if isinstance(item, str)]
-                formatted.append({"role": msg.role, "content": "\n".join(text_parts)})
+                formatted.append({"role": role, "content": "\n".join(text_parts)})
             else:
-                formatted.append({"role": msg.role, "content": str(msg.content)})
+                formatted.append({"role": role, "content": str(msg.content)})
             
         return formatted
 
@@ -96,6 +111,7 @@ class GroqProvider(LLMProvider):
         temperature: float | None = None,
         max_tokens: int | None = None,
         system_prompt: str | None = None,
+        tools: Any | None = None,
     ) -> LLMResponse:
         """Generate response from Groq."""
         formatted_msgs = self._convert_messages(messages, system_prompt)
@@ -143,6 +159,7 @@ class GroqProvider(LLMProvider):
         temperature: float | None = None,
         max_tokens: int | None = None,
         system_prompt: str | None = None,
+        tools: Any | None = None,
     ) -> AsyncIterator[str]:
         """Stream a response from Groq."""
         formatted_msgs = self._convert_messages(messages, system_prompt)

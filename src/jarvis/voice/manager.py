@@ -1,10 +1,13 @@
 """Voice conversation state machine and manager."""
 
 import asyncio
+import time
 from enum import Enum, auto
+
 import structlog
 
 from jarvis.core.session import SessionManager
+from jarvis.utils.metrics import metrics
 from jarvis.voice.capture import AudioCapture
 from jarvis.voice.stt import STTProvider
 from jarvis.voice.tts import TTSProvider
@@ -85,6 +88,10 @@ class VoiceManager:
     def _notify_jarvis_phrase(self, phrase: str) -> None:
         """Publish text when its matching audio is about to be transmitted."""
         self._set_state(VoiceState.SPEAKING)
+        if not getattr(self, "_ttfa_recorded", False) and hasattr(metrics, "_request_start_time"):
+            metrics.record_ttfa(time.perf_counter() - metrics._request_start_time)
+            self._ttfa_recorded = True
+            
         if self.on_jarvis_chunk:
             try:
                 self.on_jarvis_chunk(phrase)
@@ -101,6 +108,7 @@ class VoiceManager:
 
         async with self._response_lock:
             self._set_state(VoiceState.THINKING)
+            self._ttfa_recorded = False
             started_at = time.perf_counter()
             response_chunks: list[str] = []
 
@@ -127,6 +135,7 @@ class VoiceManager:
                     response_len=len(response),
                     latency=time.perf_counter() - started_at,
                 )
+                metrics.end_request()
             return "".join(response_chunks)
 
     async def start_ptt_loop(self):
@@ -164,7 +173,10 @@ class VoiceManager:
                     
                     # STT
                     self._set_state(VoiceState.THINKING)
+                    metrics.start_request("voice")
+                    stt_start = time.perf_counter()
                     text = await self.stt.transcribe(audio_path)
+                    metrics.record_stage("stt", time.perf_counter() - stt_start)
                     
                     try:
                         audio_path.unlink()

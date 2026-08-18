@@ -1,11 +1,11 @@
 """Database connection managers for SQLite and LanceDB."""
 
-import os
 from pathlib import Path
+
+import lancedb
 import structlog
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-import lancedb
 
 from jarvis.memory.schema import Base, SemanticMemorySchema
 

@@ -1,8 +1,8 @@
 """Screen context source for capturing and analyzing the user's desktop."""
 
 import time
+
 import structlog
-from typing import Tuple, List
 
 try:
     from PIL import Image, ImageGrab
@@ -42,7 +42,7 @@ class ScreenContextSource(ContextSource):
         # request to analyse a screenshot just because it says "can you see".
         file_terms = {"file", "folder", "directory", "desktop", "document", "download", "path"}
         if any(term in query_lower for term in file_terms) and not any(
-            term in query_lower for term in {"screen", "monitor", "display", "screenshot"}
+            term in query_lower for term in ("screen", "monitor", "display", "screenshot")
         ):
             return False
         keywords = [
@@ -52,7 +52,7 @@ class ScreenContextSource(ContextSource):
         ]
         return any(k in query_lower for k in keywords)
         
-    async def gather_context(self, query: str) -> Tuple[str, List] | str:
+    async def gather_context(self, query: str, **kwargs) -> tuple[str, list] | str:
         """Captures the active window and returns it as context with OCR."""
         logger.info("Executing screen capture", query=query)
         start_time = time.time()
@@ -86,9 +86,7 @@ class ScreenContextSource(ContextSource):
             if img.mode != "RGB":
                 img = img.convert("RGB")
                 
-            # 2. Active Window Cropping (Removed by user request to capture full screen)
-            
-            # 3. Resize if it's too large to save API bandwidth
+            # 2. Resize if it's too large to save API bandwidth
             max_width, max_height = 1920, 1080
             if img.width > max_width or img.height > max_height:
                 img.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)

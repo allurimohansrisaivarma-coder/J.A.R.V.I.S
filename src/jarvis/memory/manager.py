@@ -1,12 +1,13 @@
 """High-level memory operations."""
 
 import datetime
-import structlog
-from typing import List, Dict, Any
+from typing import Any
 
-from jarvis.memory.database import get_sqlite_session, get_lancedb_table
-from jarvis.memory.schema import Fact
+import structlog
+
+from jarvis.memory.database import get_lancedb_table, get_sqlite_session
 from jarvis.memory.embeddings import Embedder
+from jarvis.memory.schema import Fact
 
 logger = structlog.get_logger(__name__)
 
@@ -39,17 +40,24 @@ class MemoryManager:
             logger.warning("Failed to embed fact, skipping LanceDB storage")
             return
             
+        # 3. Deduplication Check
+        # Check if an extremely similar memory already exists
+        existing = self.table.search(vector, vector_column_name="vector").limit(1).to_list()
+        if existing and existing[0]["_distance"] < 0.15:
+            logger.info("Fact skipped (duplicate)", distance=existing[0]["_distance"])
+            return
+            
         data = [{
             "vector": vector,
             "content": content,
-            "timestamp": datetime.datetime.now(datetime.timezone.utc),
+            "timestamp": datetime.datetime.now(datetime.UTC),
             "type": "extracted_fact"
         }]
         
         self.table.add(data)
         logger.debug("Fact stored in vector DB successfully")
         
-    def semantic_search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+    def semantic_search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         """Search memory semantically using vector similarity."""
         logger.debug("Searching memory", query=query)
         

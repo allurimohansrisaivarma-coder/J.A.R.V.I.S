@@ -95,11 +95,11 @@ class AudioCapture:
         audio_buffer = []
         is_recording = False
         speech_streak = 0
-        silence_chunks = 0
         max_silence_chunks = int((silence_duration * self.sample_rate) / self.chunk_size)
         
         # We need an asyncio Queue to bridge the callback-based sounddevice with async
         q: asyncio.Queue[np.ndarray] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
         
         # Rolling window to track speech over the silence duration
         speech_window = collections.deque(maxlen=max_silence_chunks)
@@ -119,7 +119,9 @@ class AudioCapture:
                 # Calculate max amplitude (0.0 to 1.0)
                 vol = float(np.max(np.abs(mono_data)))
                 try:
-                    on_audio_level(vol)
+                    res = on_audio_level(vol)
+                    if asyncio.iscoroutine(res):
+                        asyncio.run_coroutine_threadsafe(res, loop)
                 except Exception:
                     pass
             
@@ -156,7 +158,7 @@ class AudioCapture:
                     # Get the next chunk from the queue
                     try:
                         chunk = await asyncio.wait_for(q.get(), timeout=0.05)
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         continue
                         
                     ptt_buffer.append(chunk)
@@ -229,6 +231,7 @@ class AudioCapture:
         """
         audio_buffer = []
         q: asyncio.Queue[np.ndarray] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
         
         def audio_callback(indata: np.ndarray, frames: int, time, status: sd.CallbackFlags):
             if status:
@@ -237,7 +240,9 @@ class AudioCapture:
             q.put_nowait(mono_data)
             if on_audio_level:
                 try:
-                    on_audio_level(float(np.max(np.abs(mono_data))))
+                    res = on_audio_level(float(np.max(np.abs(mono_data))))
+                    if asyncio.iscoroutine(res):
+                        asyncio.run_coroutine_threadsafe(res, loop)
                 except Exception:
                     pass
         
@@ -265,7 +270,7 @@ class AudioCapture:
                     try:
                         chunk = await asyncio.wait_for(q.get(), timeout=0.05)
                         audio_buffer.append(chunk)
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         continue
                         
         except asyncio.CancelledError:

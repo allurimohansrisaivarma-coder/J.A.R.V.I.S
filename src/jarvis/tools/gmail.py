@@ -141,6 +141,8 @@ class GoogleGmailTool:
         return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
 
     def create_draft(self, to: str, subject: str, body: str) -> str:
+        if not body or len(body.strip()) < 2:
+            raise GmailOperationError("JARVIS requires the complete email body to draft the email. Do not leave the body empty.")
         try:
             draft = self._service().users().drafts().create(userId="me", body={
                 "message": {"raw": self._raw_message(to, subject, body)}
@@ -152,6 +154,8 @@ class GoogleGmailTool:
     def update_draft(self, draft_id: str, to: str, subject: str, body: str) -> str:
         if not draft_id.strip():
             raise GmailOperationError("JARVIS needs the draft ID before it can update a draft.")
+        if not body or len(body.strip()) < 2:
+            raise GmailOperationError("JARVIS requires the complete email body to update the draft. Do not leave the body empty.")
         try:
             draft = self._service().users().drafts().update(userId="me", id=draft_id, body={
                 "message": {"raw": self._raw_message(to, subject, body)}

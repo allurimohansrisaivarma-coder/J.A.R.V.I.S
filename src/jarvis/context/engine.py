@@ -1,14 +1,14 @@
 """Context engine orchestrator."""
 
 import asyncio
+
 import structlog
-from typing import List, Tuple
 
 from jarvis.context.base import ContextSource
-from jarvis.context.memory_source import MemoryContextSource
-from jarvis.context.web_source import WebContextSource
 from jarvis.context.file_source import FileContextSource
+from jarvis.context.memory_source import MemoryContextSource
 from jarvis.context.screen_source import ScreenContextSource
+from jarvis.context.web_source import WebContextSource
 from jarvis.memory.manager import MemoryManager
 
 logger = structlog.get_logger(__name__)
@@ -17,18 +17,19 @@ class ContextEngine:
     """Orchestrates multiple context sources to inject World View into prompts."""
     
     def __init__(self, memory_manager: MemoryManager | None = None):
-        self.sources: List[ContextSource] = [
+        self.sources: list[ContextSource] = [
             MemoryContextSource(memory_manager),
             WebContextSource(),
             FileContextSource(),
             ScreenContextSource()
         ]
         
-    async def build_context_prompt(self, query: str) -> Tuple[str, List]:
+    async def build_context_prompt(self, query: str, **kwargs) -> tuple[str, list]:
         """Gathers context from all applicable sources concurrently.
         
         Args:
             query: The user's input.
+            **kwargs: Extra parameters (like router) passed to context sources.
             
         Returns:
             A tuple of (compiled string of context, list of image objects).
@@ -50,7 +51,7 @@ class ContextEngine:
         logger.debug("Active context sources", sources=[s.name for s in active_sources])
             
         # 2. Gather context concurrently
-        tasks = [source.gather_context(query) for source in active_sources]
+        tasks = [source.gather_context(query, **kwargs) for source in active_sources]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # 3. Format output

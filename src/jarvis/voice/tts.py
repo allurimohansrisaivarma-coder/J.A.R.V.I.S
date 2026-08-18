@@ -1,13 +1,14 @@
 """Text-to-speech using Microsoft Edge TTS API with streaming playback."""
+# ruff: noqa: BLE001, S110
 
 import asyncio
+import inspect
 import os
 import tempfile
-import inspect
 from collections.abc import AsyncIterator, Callable
-import structlog
 
 import edge_tts
+import structlog
 
 logger = structlog.get_logger(__name__)
 
@@ -48,7 +49,7 @@ class TTSProvider:
         self._use_pygame = False
         try:
             import pygame
-            pygame.mixer.init(frequency=24000, channels=2)
+            pygame.mixer.init()
             self._use_pygame = True
             logger.info("TTS initialized with pygame playback", voice=voice, rate=rate, pitch=pitch)
         except Exception as e:
@@ -84,10 +85,14 @@ class TTSProvider:
         fd, temp_path = tempfile.mkstemp(suffix=".mp3")
         os.close(fd)
         
+        rate_str = str(self.rate).strip()
+        if not rate_str.endswith('%'): rate_str += '%'
+        if not rate_str.startswith('+') and not rate_str.startswith('-'): rate_str = f"+{rate_str}"
+
         try:
             logger.debug("Generating TTS audio", text_length=len(clean_text), voice=self.voice)
             communicate = edge_tts.Communicate(
-                clean_text, self.voice, rate=self.rate, pitch=self.pitch
+                clean_text, self.voice, rate=rate_str, pitch=self.pitch
             )
             await communicate.save(temp_path)
             
@@ -228,9 +233,13 @@ class TTSProvider:
                     fd, temp_path = tempfile.mkstemp(suffix=".mp3")
                     os.close(fd)
                     
+                    rate_str = str(self.rate).strip()
+                    if not rate_str.endswith('%'): rate_str += '%'
+                    if not rate_str.startswith('+') and not rate_str.startswith('-'): rate_str = f"+{rate_str}"
+
                     try:
                         communicate = edge_tts.Communicate(
-                            clean, self.voice, rate=self.rate, pitch=self.pitch
+                            clean, self.voice, rate=rate_str, pitch=self.pitch
                         )
                         await communicate.save(temp_path)
                         
@@ -322,51 +331,6 @@ class TTSProvider:
             self._is_speaking = False
             self._current_queue = None
     
-    async def _speak_sentence(self, sentence: str) -> None:
-        """Synthesize and play a single sentence.
-        
-        Uses temp file + pygame approach (reliable on Windows).
-        
-        Args:
-            sentence: Clean text sentence to speak.
-        """
-        if self._stop_requested or not sentence:
-            return
-            
-        fd, temp_path = tempfile.mkstemp(suffix=".mp3")
-        os.close(fd)
-        
-        try:
-            communicate = edge_tts.Communicate(
-                sentence, self.voice, rate=self.rate, pitch=self.pitch
-            )
-            await communicate.save(temp_path)
-            
-            if self._stop_requested:
-                return
-            
-            if self._use_pygame:
-                import pygame
-                pygame.mixer.music.load(temp_path)
-                pygame.mixer.music.play()
-                while pygame.mixer.music.get_busy() and not self._stop_requested:
-                    await asyncio.sleep(0.05)
-                    
-        except Exception as e:
-            logger.error("Error speaking sentence", error=str(e), sentence_len=len(sentence))
-        finally:
-            if self._use_pygame:
-                try:
-                    import pygame
-                    pygame.mixer.music.unload()
-                except (AttributeError, Exception):
-                    pass
-            try:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-            except Exception:
-                pass
-
     def stop(self) -> None:
         """Request immediate stop of any current speech."""
         self._stop_requested = True

@@ -6,9 +6,9 @@ Usage:
     jarvis --config     Path to config file
 """
 
+import argparse
 import asyncio
 import sys
-import argparse
 from pathlib import Path
 
 # Force UTF-8 encoding for Windows terminals
@@ -17,7 +17,7 @@ if sys.stdout is not None and hasattr(sys.stdout, 'encoding') and sys.stdout.enc
 
 from jarvis import __version__
 from jarvis.core.session import SessionManager
-from jarvis.memory import init_db, MemoryManager
+from jarvis.memory import MemoryManager, init_db
 from jarvis.memory.embeddings import Embedder
 
 
@@ -266,7 +266,7 @@ def main() -> None:
             import sys
             if getattr(sys, 'frozen', False):
                 import ctypes
-                ctypes.windll.user32.MessageBoxW(0, f"JARVIS Initialization Failed:\n\n{str(e)}\n\nPlease ensure your .env file is next to the JARVIS.exe or in the project root.", "JARVIS Error", 0x10)
+                ctypes.windll.user32.MessageBoxW(0, f"JARVIS Initialization Failed:\n\n{e!s}\n\nPlease ensure your .env file is next to the JARVIS.exe or in the project root.", "JARVIS Error", 0x10)
             sys.exit(1)
             
         print_banner(session.available_providers)
@@ -276,7 +276,7 @@ def main() -> None:
             if session.settings.gemini_api_keys and session.settings.primary_gemini_key not in ("fallback", "env_or_placeholder"):
                 init_db()
                 embedder = Embedder(api_keys=session.settings.gemini_api_keys)
-                memory = MemoryManager(embedder=embedder)
+                MemoryManager(embedder=embedder)
                 print(f"{C.CYAN}Memory System: Online{C.RESET}")
         except Exception as e:
             print(f"{C.YELLOW}Memory System: Offline ({e}){C.RESET}")

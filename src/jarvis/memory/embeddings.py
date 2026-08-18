@@ -1,75 +1,39 @@
-"""Embeddings generation using Gemini."""
+"""Embeddings generation using local Sentence Transformers."""
 
 import structlog
-from google import genai
-from google.genai import types
-from jarvis.config.settings import get_settings
+from sentence_transformers import SentenceTransformer
 
 logger = structlog.get_logger(__name__)
 
 class Embedder:
-    """Generates vector embeddings for text."""
+    """Generates vector embeddings for text locally."""
     
-    def __init__(self, api_keys: str | list[str] | None = None, model: str = "gemini-embedding-2"):
-        """Initialize the embedder.
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2", api_keys=None):
+        """Initialize the local embedder.
         
         Args:
-            api_keys: Gemini API keys. If not provided, fetched from settings.
-            model: The Gemini embedding model to use.
+            model_name: The SentenceTransformer model to use.
+            api_keys: Maintained for backwards compatibility, ignored.
         """
-        self.model = model
-        if not api_keys:
-            api_keys = get_settings().gemini_api_keys
-            
-        if not api_keys or (isinstance(api_keys, str) and api_keys in ("", "fallback", "env_or_placeholder")):
-            raise ValueError("GEMINI_API_KEYS must be set for embeddings.")
+        self.model_name = model_name
+        logger.info("Loading local embedding model", model=self.model_name)
+        # This will download weights to ~/.cache/huggingface on first run
+        self.model = SentenceTransformer(self.model_name)
         
-        self.api_keys = api_keys if isinstance(api_keys, list) else [api_keys]
-        self._current_key_idx = 0
-        self.client = genai.Client(api_key=self.api_keys[self._current_key_idx])
-        
-    def _execute_with_retry(self, task_type: str, text: str) -> list[float]:
-        import time
-        from google.genai import errors
-        
-        max_retries = max(3, len(self.api_keys) * 2)
-        base_delay = 1.0
-        keys_attempted_this_request = 1
-
-        for attempt in range(max_retries):
-            try:
-                response = self.client.models.embed_content(
-                    model=self.model,
-                    contents=text,
-                    config=types.EmbedContentConfig(task_type=task_type)
-                )
-                if response.embeddings and len(response.embeddings) > 0:
-                    return response.embeddings[0].values
-                return []
-            except errors.ClientError as e:
-                if e.code == 429:
-                    if keys_attempted_this_request < len(self.api_keys):
-                        self._current_key_idx = (self._current_key_idx + 1) % len(self.api_keys)
-                        logger.warning("embeddings.rate_limit_rotating_key", key_idx=self._current_key_idx)
-                        self.client = genai.Client(api_key=self.api_keys[self._current_key_idx])
-                        keys_attempted_this_request += 1
-                        continue
-
-                    # All keys exhausted, zero-latency failover
-                    logger.error("embeddings.rate_limit_exhausted", error=str(e))
-                    return []
-                else:
-                    logger.error("Failed to generate embedding", error=str(e))
-                    return []
-            except Exception as e:
-                logger.error("Failed to generate embedding", error=str(e))
-                return []
-        return []
-
     def embed_text(self, text: str) -> list[float]:
         """Generate a vector embedding for a single string of text to be stored."""
-        return self._execute_with_retry("RETRIEVAL_DOCUMENT", text)
+        try:
+            vector = self.model.encode(text)
+            return vector.tolist()
+        except Exception as e:
+            logger.error("Failed to generate local embedding", error=str(e))
+            return []
             
     def embed_query(self, text: str) -> list[float]:
         """Generate a vector embedding for a search query."""
-        return self._execute_with_retry("RETRIEVAL_QUERY", text)
+        try:
+            vector = self.model.encode(text)
+            return vector.tolist()
+        except Exception as e:
+            logger.error("Failed to generate local query embedding", error=str(e))
+            return []

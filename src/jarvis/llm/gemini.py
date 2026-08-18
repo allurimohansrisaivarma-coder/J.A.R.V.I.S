@@ -1,7 +1,7 @@
 """Gemini provider implementation."""
 
-import asyncio
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import structlog
 from google import genai
@@ -68,6 +68,8 @@ class GeminiProvider(LLMProvider):
                     for item in msg.content:
                         if isinstance(item, str):
                             parts.append(types.Part.from_text(text=item))
+                        elif isinstance(item, types.Part):
+                            parts.append(item)
                         else:
                             # Assume it's a PIL Image
                             import io
@@ -85,28 +87,38 @@ class GeminiProvider(LLMProvider):
                     )
             elif msg.role == "assistant":
                 if isinstance(msg.content, list):
-                    parts = [types.Part.from_text(text=str(item)) for item in msg.content]
+                    parts = []
+                    for item in msg.content:
+                        if isinstance(item, str):
+                            parts.append(types.Part.from_text(text=item))
+                        elif isinstance(item, types.Part):
+                            parts.append(item)
+                        else:
+                            parts.append(types.Part.from_text(text=str(item)))
                     contents.append(types.Content(role="model", parts=parts))
                 else:
                     contents.append(
                         types.Content(role="model", parts=[types.Part.from_text(text=str(msg.content))])
                     )
+            elif msg.role == "tool":
+                if isinstance(msg.content, list):
+                    parts = [item for item in msg.content if isinstance(item, types.Part)]
+                    contents.append(types.Content(role="user", parts=parts))
 
         return contents, system_prompt
 
     async def _execute_with_retry(self, method_name: str, *args, **kwargs):
         """Execute a method on self.client.aio.models with key rotation and backoff."""
         max_retries = max(3, len(self.api_keys) * 2)
-        base_delay = 1.0
         keys_attempted_this_request = 1
 
         for attempt in range(max_retries):
             try:
                 func = getattr(self.client.aio.models, method_name)
                 return await func(*args, **kwargs)
-            except errors.ClientError as e:
-                # 429 Too Many Requests
-                if e.code == 429:
+            except errors.APIError as e:
+                # 429 Too Many Requests, 503 Service Unavailable, 500 Internal Error
+                if e.code in (429, 503, 500):
                     # Key rotation logic
                     if keys_attempted_this_request < len(self.api_keys):
                         self._current_key_idx = (self._current_key_idx + 1) % len(self.api_keys)
@@ -132,6 +144,7 @@ class GeminiProvider(LLMProvider):
         temperature: float | None = None,
         max_tokens: int | None = None,
         system_prompt: str | None = None,
+        tools: Any | None = None,
     ) -> LLMResponse:
         """Generate response with retry logic and telemetry."""
         contents, msg_sys_prompt = self._convert_messages(messages)
@@ -142,6 +155,7 @@ class GeminiProvider(LLMProvider):
             temperature=temperature if temperature is not None else self.temperature,
             max_output_tokens=max_tokens if max_tokens is not None else self.max_output_tokens,
             system_instruction=final_system_prompt,
+            tools=[tools] if tools else None,
         )
 
         logger.debug("gemini.generate.start", model=self._model_name, message_count=len(messages), key_idx=self._current_key_idx + 1)
@@ -166,14 +180,21 @@ class GeminiProvider(LLMProvider):
             key_idx=self._current_key_idx + 1
         )
 
+        tool_calls = []
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if part.function_call:
+                    tool_calls.append(part.function_call)
+
         return LLMResponse(
-            content=response.text or "",
+            content=response.text if response.candidates else "",
             model=self._model_name,
             provider=self.name,
             usage=usage,
             latency_ms=timer.latency_ms,
-            # Using basic default string for finish_reason if unavailable
-            raw={}
+            finish_reason=str(response.candidates[0].finish_reason.name) if response.candidates else "stop",
+            raw=response.model_dump(),
+            tool_calls=tool_calls
         )
 
     async def stream(
@@ -183,6 +204,7 @@ class GeminiProvider(LLMProvider):
         temperature: float | None = None,
         max_tokens: int | None = None,
         system_prompt: str | None = None,
+        tools: Any | None = None,
     ) -> AsyncIterator[str]:
         """Stream response chunks from the model."""
         contents, msg_sys_prompt = self._convert_messages(messages)
@@ -193,6 +215,7 @@ class GeminiProvider(LLMProvider):
             temperature=temperature if temperature is not None else self.temperature,
             max_output_tokens=max_tokens if max_tokens is not None else self.max_output_tokens,
             system_instruction=final_system_prompt,
+            tools=[tools] if tools else None,
         )
 
         logger.debug("gemini.stream.start", model=self._model_name, key_idx=self._current_key_idx + 1)
@@ -207,6 +230,9 @@ class GeminiProvider(LLMProvider):
             async for chunk in stream:
                 if chunk.text:
                     yield chunk.text
+                if chunk.function_calls:
+                    for fc in chunk.function_calls:
+                        yield fc
         except Exception as e:
             logger.error("gemini.stream.error", error=str(e))
             raise

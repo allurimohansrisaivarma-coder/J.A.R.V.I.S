@@ -1,6 +1,7 @@
 """Speech-to-text using Groq Whisper API."""
 
 from pathlib import Path
+
 import structlog
 from groq import AsyncGroq
 

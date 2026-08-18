@@ -1,5 +1,6 @@
 import asyncio
 import json
+
 import structlog
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -113,7 +114,12 @@ class WebSocketServer:
                         silence_duration = new_settings.get("silence_duration", cfg.silence_duration)
                         cfg.silence_duration = min(5.0, max(0.2, float(silence_duration)))
                         cfg.tts_voice = str(new_settings.get("tts_voice", cfg.tts_voice))
-                        cfg.tts_rate = str(new_settings.get("tts_rate", cfg.tts_rate))
+                        
+                        rate = str(new_settings.get("tts_rate", cfg.tts_rate)).strip()
+                        if not rate.endswith('%'): rate += '%'
+                        if not rate.startswith('+') and not rate.startswith('-'):
+                            rate = f"+{rate}"
+                        cfg.tts_rate = rate
 
                         if self.voice_manager:
                             self.voice_manager.tts.voice = cfg.tts_voice

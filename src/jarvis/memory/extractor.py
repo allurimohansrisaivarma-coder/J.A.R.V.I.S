@@ -1,7 +1,8 @@
 """Background memory extraction from conversations."""
 
-import structlog
 from typing import TYPE_CHECKING
+
+import structlog
 
 from jarvis.llm.base import Message
 from jarvis.memory.manager import MemoryManager
@@ -13,8 +14,16 @@ logger = structlog.get_logger(__name__)
 
 EXTRACTION_PROMPT = """
 You are a memory extraction sub-system. Analyze the following conversation transcript.
-Extract any NEW permanent facts, user preferences, names, or actionable tasks mentioned.
-Output each fact on a new line. Do not output anything else. If there is nothing to extract, output exactly "NONE".
+Your goal is to extract EVERYTHING that could possibly be useful for future context.
+Extract:
+- User preferences, names, habits, or facts about the user.
+- Actionable tasks, plans, or ongoing projects mentioned.
+- Technical context (e.g. tools used, file paths, coding patterns, errors).
+- Specific details, nuances, or decisions discussed in the conversation.
+- Any other detail that would help an AI assistant remember the context of this conversation.
+
+Format each extracted detail as a self-contained sentence on a new line. 
+Do not output anything else. If there is absolutely nothing to extract, output exactly "NONE".
 """
 
 class MemoryExtractor:
@@ -58,7 +67,7 @@ class MemoryExtractor:
                 facts = [f.strip() for f in content.split("\n") if f.strip()]
                 for fact in facts:
                     # Remove common markdown bullet points if present
-                    if fact.startswith("-") or fact.startswith("*"):
+                    if fact.startswith(("-", "*")):
                         fact = fact[1:].strip()
 
                     # Do not persist file dumps, prompts, or other noisy

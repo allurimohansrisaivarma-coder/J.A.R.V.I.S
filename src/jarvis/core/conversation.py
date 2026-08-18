@@ -1,6 +1,7 @@
 import uuid
-from datetime import datetime, timezone
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+
 import structlog
 
 from jarvis.llm.base import Message
@@ -19,8 +20,8 @@ class Conversation:
     """Represents a single conversation session."""
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     messages: list[Message] = field(default_factory=list)
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict = field(default_factory=dict)
 
     @property
@@ -41,7 +42,7 @@ class Conversation:
     def add_message(self, message: Message) -> None:
         """Append a message and update timestamp."""
         self.messages.append(message)
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(UTC)
 
     def get_recent(self, n: int) -> list[Message]:
         """Get the last n messages."""

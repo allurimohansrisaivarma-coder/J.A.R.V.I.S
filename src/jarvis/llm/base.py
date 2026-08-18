@@ -2,9 +2,10 @@
 
 import time
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import AsyncIterator
+from typing import Any
 
 
 class ModelTier(Enum):
@@ -36,6 +37,11 @@ class Message:
         """Create an assistant message."""
         return cls(role="assistant", content=text)
 
+    @classmethod
+    def tool(cls, content: str | list, name: str) -> "Message":
+        """Create a tool response message."""
+        return cls(role="tool", content=content, name=name)
+
 
 @dataclass
 class TokenUsage:
@@ -51,34 +57,31 @@ class TokenUsage:
 
 @dataclass
 class LLMResponse:
-    """Response from an LLM provider."""
+    """Standardized response from an LLM provider."""
     content: str
     model: str
     provider: str
     usage: TokenUsage
     latency_ms: float
     finish_reason: str = "stop"
-    raw: dict = field(default_factory=dict)
+    raw: dict | None = None
+    tool_calls: list[Any] = field(default_factory=list)
 
 
 class LLMError(Exception):
     """Base exception for LLM errors."""
-    pass
 
 
 class RateLimitError(LLMError):
     """Rate limit exceeded."""
-    pass
 
 
 class AuthenticationError(LLMError):
     """Authentication failed."""
-    pass
 
 
 class ProviderUnavailableError(LLMError):
     """Provider is currently unavailable."""
-    pass
 
 
 class _TimingContext:
@@ -108,13 +111,11 @@ class LLMProvider(ABC):
     @abstractmethod
     def name(self) -> str:
         """Name of the provider."""
-        pass
 
     @property
     @abstractmethod
     def tier(self) -> ModelTier:
         """Model tier of the provider."""
-        pass
 
     @abstractmethod
     async def generate(
@@ -124,9 +125,9 @@ class LLMProvider(ABC):
         temperature: float | None = None,
         max_tokens: int | None = None,
         system_prompt: str | None = None,
+        tools: Any | None = None,
     ) -> LLMResponse:
         """Generate a response from the LLM."""
-        pass
 
     @abstractmethod
     async def stream(
@@ -136,14 +137,13 @@ class LLMProvider(ABC):
         temperature: float | None = None,
         max_tokens: int | None = None,
         system_prompt: str | None = None,
+        tools: Any | None = None,
     ) -> AsyncIterator[str]:
         """Stream a response from the LLM."""
-        pass
 
     @abstractmethod
     async def health_check(self) -> bool:
         """Check if the provider is healthy."""
-        pass
 
     def _build_timing_context(self) -> _TimingContext:
         """Build a timing context to measure latency."""

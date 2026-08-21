@@ -10,15 +10,19 @@ import argparse
 import asyncio
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 # Force UTF-8 encoding for Windows terminals
-if sys.stdout is not None and hasattr(sys.stdout, 'encoding') and sys.stdout.encoding is not None and sys.stdout.encoding.lower() != 'utf-8':
-    sys.stdout.reconfigure(encoding='utf-8')
+if (
+    sys.stdout is not None
+    and hasattr(sys.stdout, "encoding")
+    and sys.stdout.encoding is not None
+    and sys.stdout.encoding.lower() != "utf-8"
+):
+    cast(Any, sys.stdout).reconfigure(encoding="utf-8")
 
 from jarvis import __version__
 from jarvis.core.session import SessionManager
-from jarvis.memory import MemoryManager, init_db
-from jarvis.memory.embeddings import Embedder
 
 
 # ANSI color codes
@@ -40,7 +44,11 @@ def _supports_color() -> bool:
     return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 
 
-C = _Colors if _supports_color() else type("NoColor", (), {k: "" for k in vars(_Colors) if not k.startswith("_")})()
+C = (
+    _Colors
+    if _supports_color()
+    else type("NoColor", (), {k: "" for k in vars(_Colors) if not k.startswith("_")})()
+)
 
 
 def print_banner(providers: list[str] | None = None) -> None:
@@ -92,18 +100,15 @@ async def async_main(args) -> int:
         print(f"\n{C.RED}Initialization failed: {e}{C.RESET}")
         return 1
 
+    settings = session.settings
+    conversation = session.conversation
+    assert settings is not None and conversation is not None
+
     print_banner(session.available_providers)
 
-    # Initialize memory if Gemini is available
-    memory = None
-    try:
-        if session.settings.gemini_api_keys and session.settings.primary_gemini_key not in ("fallback", "env_or_placeholder"):
-            init_db()
-            embedder = Embedder(api_keys=session.settings.gemini_api_keys)
-            memory = MemoryManager(embedder=embedder)
-            print(f"{C.CYAN}Memory System: Online{C.RESET}")
-    except Exception as e:
-        print(f"{C.YELLOW}Memory System: Offline ({e}){C.RESET}")
+    memory = session.memory
+    if memory:
+        print(f"{C.CYAN}Memory System: Online{C.RESET}")
 
     # Removed UI block from here since it's now handled in main()
 
@@ -113,15 +118,18 @@ async def async_main(args) -> int:
             from jarvis.voice.stt import STTProvider
             from jarvis.voice.tts import TTSProvider
 
-            if not session.settings.groq_api_key:
+            if not settings.primary_groq_key:
                 print(f"\n{C.RED}Voice mode requires GROQ_API_KEY for Whisper STT.{C.RESET}")
                 return 1
 
             print(f"\n{C.YELLOW}[Initializing Voice Mode...]{C.RESET}")
-            stt = STTProvider(api_key=session.settings.groq_api_key)
-            
             # Use voice config from settings
-            voice_cfg = session.settings.voice
+            voice_cfg = settings.voice
+            stt = STTProvider(
+                api_key=settings.primary_groq_key,
+                model=voice_cfg.stt_model,
+                language=voice_cfg.stt_language,
+            )
             tts = TTSProvider(
                 voice=voice_cfg.tts_voice,
                 rate=voice_cfg.tts_rate,
@@ -147,9 +155,12 @@ async def async_main(args) -> int:
             # interrupts speech first, then records until it is released.
             try:
                 from jarvis.voice.hotkey import HotkeyListener
+
                 hotkey = HotkeyListener(hotkey_combo=voice_cfg.push_to_talk_key)
                 hotkey.start(asyncio.get_running_loop(), manager.hotkey_queue)
-                print(f"{C.CYAN}Push-to-Talk active. Hold [{voice_cfg.push_to_talk_key.upper()}] to speak. Press Ctrl+C to exit.{C.RESET}\n")
+                print(
+                    f"{C.CYAN}Push-to-Talk active. Hold [{voice_cfg.push_to_talk_key.upper()}] to speak. Press Ctrl+C to exit.{C.RESET}\n"
+                )
                 await manager.start_ptt_loop()
             except ImportError:
                 print(f"{C.RED}Push-to-talk requires pynput. Install: pip install pynput{C.RESET}")
@@ -182,17 +193,19 @@ async def async_main(args) -> int:
                 print_help()
                 continue
             elif cmd == "/new":
-                session.conversation.end_conversation()
-                session.conversation.new_conversation()
+                conversation.end_conversation()
+                conversation.new_conversation()
                 print(f"{C.YELLOW}[Started a new conversation]{C.RESET}")
                 continue
             elif cmd == "/history":
-                history = session.conversation.get_history()
+                history = conversation.get_history()
                 if history:
                     print(f"{C.YELLOW}[{len(history)} conversation(s) in this session]{C.RESET}")
                     for i, conv in enumerate(history, 1):
                         msg_count = len(conv.user_messages)
-                        print(f"  {i}. {msg_count} message(s) — {conv.created_at.strftime('%H:%M:%S')}")
+                        print(
+                            f"  {i}. {msg_count} message(s) — {conv.created_at.strftime('%H:%M:%S')}"
+                        )
                 else:
                     print(f"{C.YELLOW}[No conversation history]{C.RESET}")
                 continue
@@ -223,7 +236,12 @@ async def async_main(args) -> int:
 
             try:
                 async for chunk in session.process_input_stream(user_input):
-                    print(chunk, end="", flush=True)
+                    if isinstance(chunk, dict):
+                        terminal_text = chunk.get("__terminal__")
+                        if terminal_text:
+                            print(f"\n{C.DIM}{terminal_text}{C.RESET}", end="", flush=True)
+                    else:
+                        print(chunk, end="", flush=True)
                 print()
             except Exception as e:
                 print(f"\n{C.RED}Error: {e}{C.RESET}")
@@ -245,12 +263,32 @@ def main() -> None:
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument("--voice", action="store_true", help="Start in voice mode")
     parser.add_argument("--ui", action="store_true", help="Launch the desktop UI")
+    parser.add_argument("--mcp-server", help=argparse.SUPPRESS)
 
     args = parser.parse_args()
-    
+
+    if args.mcp_server:
+        server_modules = {
+            "mcp_ddg": "jarvis.tools.mcp_ddg",
+            "mcp_browser": "jarvis.tools.mcp_browser",
+            "mcp_weather": "jarvis.tools.mcp_weather",
+            "mcp_world_monitor": "jarvis.tools.mcp_world_monitor",
+        }
+        module_name = server_modules.get(args.mcp_server)
+        if module_name is None:
+            parser.error(f"Unknown MCP server: {args.mcp_server}")
+        import importlib
+
+        module = importlib.import_module(module_name)
+        module.mcp.run()
+        return
+
     # If running as a bundled executable (double-clicked), default to UI mode
     import sys
-    if getattr(sys, 'frozen', False) and not any(arg in sys.argv for arg in ['--ui', '--voice', '--version', '--help', '-h']):
+
+    if getattr(sys, "frozen", False) and not any(
+        arg in sys.argv for arg in ["--ui", "--voice", "--version", "--help", "-h"]
+    ):
         args.ui = True
 
     if args.version:
@@ -259,67 +297,37 @@ def main() -> None:
 
     if args.ui:
         session = SessionManager(config_path=args.config)
-        try:
-            asyncio.run(session.initialize())
-        except Exception as e:
-            print(f"\n{C.RED}Initialization failed: {e}{C.RESET}")
-            import sys
-            if getattr(sys, 'frozen', False):
-                import ctypes
-                ctypes.windll.user32.MessageBoxW(0, f"JARVIS Initialization Failed:\n\n{e!s}\n\nPlease ensure your .env file is next to the JARVIS.exe or in the project root.", "JARVIS Error", 0x10)
-            sys.exit(1)
-            
-        print_banner(session.available_providers)
-        
-        # Initialize memory if Gemini is available
-        try:
-            if session.settings.gemini_api_keys and session.settings.primary_gemini_key not in ("fallback", "env_or_placeholder"):
-                init_db()
-                embedder = Embedder(api_keys=session.settings.gemini_api_keys)
-                MemoryManager(embedder=embedder)
-                print(f"{C.CYAN}Memory System: Online{C.RESET}")
-        except Exception as e:
-            print(f"{C.YELLOW}Memory System: Offline ({e}){C.RESET}")
-            
-        # Initialize VoiceManager for Live Conversation if configured
-        voice_manager = None
-        if session.settings.groq_api_key:
-            try:
-                from jarvis.voice import VoiceManager
-                from jarvis.voice.stt import STTProvider
-                from jarvis.voice.tts import TTSProvider
-                
-                stt = STTProvider(api_key=session.settings.groq_api_key)
-                voice_cfg = session.settings.voice
-                tts = TTSProvider(
-                    voice=voice_cfg.tts_voice,
-                    rate=voice_cfg.tts_rate,
-                    pitch=voice_cfg.tts_pitch,
-                )
-                voice_manager = VoiceManager(session, stt, tts)
-                print(f"{C.CYAN}Voice System: Online{C.RESET}")
-            except Exception as e:
-                print(f"{C.YELLOW}Voice System: Offline ({e}){C.RESET}")
-                import traceback
-                print(traceback.format_exc())
-
+        exit_code = 0
         try:
             from jarvis.ui.app import launch_ui
-            launch_ui(session, voice_manager=voice_manager)
+
+            launch_ui(session)
         except ImportError as e:
-            print(f"\n{C.RED}UI dependencies missing. Install: pip install pywebview websockets{C.RESET}")
+            exit_code = 1
+            print(
+                f"\n{C.RED}UI dependencies missing. Install: pip install pywebview websockets{C.RESET}"
+            )
             print(f"{C.DIM}Error: {e}{C.RESET}")
         except Exception as e:
+            exit_code = 1
             print(f"\n{C.RED}UI failed: {e}{C.RESET}")
-        finally:
-            asyncio.run(session.shutdown())
-            print(f"\n{C.DIM}Goodbye.{C.RESET}")
-        sys.exit(0)
+            if getattr(sys, "frozen", False):
+                import ctypes
+
+                ctypes.windll.user32.MessageBoxW(
+                    0,
+                    f"JARVIS failed to start:\n\n{e!s}\n\nCheck your API keys and logs.",
+                    "JARVIS Error",
+                    0x10,
+                )
+        print(f"\n{C.DIM}Goodbye.{C.RESET}")
+        sys.exit(exit_code)
     else:
         sys.exit(asyncio.run(async_main(args)))
 
 
 if __name__ == "__main__":
     import multiprocessing
+
     multiprocessing.freeze_support()
     main()

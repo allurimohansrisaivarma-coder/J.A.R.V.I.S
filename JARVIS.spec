@@ -6,7 +6,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('src/jarvis/ui/static', 'jarvis/ui/static'), ('src/jarvis/config/defaults.yaml', 'jarvis/config'), ('src/jarvis/voice/silero_vad.onnx', 'jarvis/voice')],
-    hiddenimports=['onnxruntime', 'lancedb', 'google.genai', 'structlog', 'webview', 'websockets', 'pynput', 'sounddevice', 'soundfile', 'numpy', 'PIL', 'imagehash', 'win32gui', 'mss', 'dxcam', 'groq'],
+    hiddenimports=['onnxruntime', 'lancedb', 'google.genai', 'structlog', 'webview', 'websockets', 'pynput', 'sounddevice', 'soundfile', 'numpy', 'PIL', 'imagehash', 'win32gui', 'mss', 'dxcam', 'groq', 'sentence_transformers', 'mcp.server.fastmcp', 'jarvis.tools.mcp_ddg', 'jarvis.tools.mcp_browser', 'jarvis.tools.mcp_weather', 'jarvis.tools.mcp_world_monitor', 'jarvis.tools.windows_launcher', 'playwright.async_api'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -33,6 +33,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['src/jarvis/ui/static/jarvis_icon.ico'],
+    version='version_info.txt',
 )
 coll = COLLECT(
     exe,

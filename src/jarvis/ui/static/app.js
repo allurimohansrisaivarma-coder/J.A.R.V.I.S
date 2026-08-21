@@ -4,10 +4,11 @@
 
 let ws;
 let reconnectTimeout = 1000;
+let reconnectTimer = null;
+let dashboardInterval = null;
 let currentJarvisBubble = null;
 let currentJarvisText = "";
-
-// Voice state
+let currentJarvisMeta = "";
 let isRecording = false;
 
 // Widget state
@@ -21,15 +22,32 @@ const messageInput    = document.getElementById("message-input");
 const sendBtn         = document.getElementById("send-btn");
 const micBtn          = document.getElementById("mic-btn");
 const settingsBtn     = document.getElementById("settings-btn");
-const settingsModal   = document.getElementById("settings-modal");
-const closeSettingsBtn= document.getElementById("close-settings-btn");
+const settingsModal = document.getElementById("settings-modal");
+const closeSettingsBtn = document.getElementById("close-settings-btn");
 const saveSettingsBtn = document.getElementById("save-settings-btn");
+
+const memoryFilter    = document.getElementById("memory-filter");
+const refreshMemBtn   = document.getElementById("refresh-mem-btn");
+const newMemoryInput  = document.getElementById("new-memory-input");
+const addMemoryBtn    = document.getElementById("add-memory-btn");
+
 const settingHotkey   = document.getElementById("setting-hotkey");
 const settingSilence  = document.getElementById("setting-silence");
 const settingVoice    = document.getElementById("setting-voice");
 const settingRate     = document.getElementById("setting-rate");
+const settingWeatherCity = document.getElementById("setting-weather-city");
 const minimizeBtn     = document.getElementById("minimize-btn");
+const widgetExpandBtn = document.getElementById("widget-expand-btn");
 const closeBtn        = document.getElementById("close-btn");
+
+// World Monitor DOM
+const worldMonitor    = document.getElementById("world-monitor");
+const closeMonitorBtn = document.getElementById("close-monitor-btn");
+const wmRam           = document.getElementById("wm-ram");
+const wmCpu           = document.getElementById("wm-cpu");
+const wmWeather       = document.getElementById("wm-weather");
+const wmNews          = document.getElementById("wm-news");
+const wmSchedule      = document.getElementById("wm-schedule");
 
 
 // ========================================
@@ -37,12 +55,18 @@ const closeBtn        = document.getElementById("close-btn");
 // ========================================
 
 function connectWebSocket() {
-    ws = new WebSocket("ws://localhost:8741");
+    const queryParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.slice(1));
+    const port = queryParams.get("port") || hashParams.get("port") || "8741";
+    ws = new WebSocket(`ws://127.0.0.1:${port}`);
 
     ws.onopen = () => {
-        console.log("Connected to JARVIS HUD");
+        console.log("WebSocket connected");
+        requestDashboardData(); // Fetch initial stats and memory
         reconnectTimeout = 1000;
         updateCoreState("IDLE");
+        if (dashboardInterval) clearInterval(dashboardInterval);
+        dashboardInterval = setInterval(requestDashboardData, 5000);
     };
 
     ws.onmessage = (event) => {
@@ -57,7 +81,11 @@ function connectWebSocket() {
     ws.onclose = () => {
         console.log("Disconnected from JARVIS HUD");
         updateCoreState("OFFLINE");
-        setTimeout(connectWebSocket, reconnectTimeout);
+        if (dashboardInterval) {
+            clearInterval(dashboardInterval);
+            dashboardInterval = null;
+        }
+        reconnectTimer = setTimeout(connectWebSocket, reconnectTimeout);
         reconnectTimeout = Math.min(reconnectTimeout * 2, 10000);
     };
 
@@ -69,7 +97,31 @@ function connectWebSocket() {
 
 
 // ========================================
-//  Message Handler
+//  Terminal Log Functions
+// ========================================
+
+function appendTerminalLog(text) {
+    const termContainer = document.getElementById("terminal-container");
+    if (!termContainer) return;
+
+    const line = document.createElement("div");
+    line.className = "terminal-line";
+
+    if (text.includes("Executing:")) {
+        line.classList.add("command");
+    } else if (text.includes("Finished:")) {
+        line.classList.add("result");
+    } else if (text.includes("Error:") || text.includes("Failed:")) {
+        line.classList.add("error");
+    }
+
+    line.textContent = text;
+    termContainer.appendChild(line);
+    termContainer.scrollTop = termContainer.scrollHeight;
+}
+
+// ========================================
+//  Input Handling
 // ========================================
 
 function handleMessage(data) {
@@ -77,15 +129,17 @@ function handleMessage(data) {
         if (!currentJarvisBubble) {
             currentJarvisBubble = createMessageBubble("jarvis");
             currentJarvisText = "";
+            currentJarvisMeta = "";
         }
         currentJarvisText += data.text;
         currentJarvisBubble.innerHTML =
-            `<span class="hud-msg-prefix">></span> ` + renderMarkdown(currentJarvisText);
+            `<span class="hud-msg-prefix">></span> ` + renderMarkdown(currentJarvisText) + currentJarvisMeta;
         scrollToBottom();
 
     } else if (data.type === "done") {
         currentJarvisBubble = null;
         currentJarvisText = "";
+        currentJarvisMeta = "";
 
     } else if (data.type === "state") {
         updateCoreState(data.state);
@@ -100,6 +154,12 @@ function handleMessage(data) {
             }
         }
 
+    } else if (data.type === "terminal") {
+        appendTerminalLog(data.text);
+    } else if (data.type === "error") {
+        const bubble = createMessageBubble("system");
+        bubble.textContent = `SYSTEM> ${data.message || "Request failed"}`;
+        scrollToBottom();
     } else if (data.type === "user_msg") {
         appendUserMessage(data.text);
 
@@ -108,6 +168,63 @@ function handleMessage(data) {
         settingSilence.value = data.settings.silence_duration || 0.5;
         settingVoice.value  = data.settings.tts_voice || "en-GB-RyanNeural";
         settingRate.value   = data.settings.tts_rate || "+20%";
+        settingWeatherCity.value = data.settings.weather_city || "";
+    } else if (data.type === "message_meta") {
+        if (!currentJarvisBubble) {
+            currentJarvisBubble = createMessageBubble("jarvis");
+            currentJarvisText = "";
+            currentJarvisMeta = "";
+        }
+        const provider = escapeHtml(String(data.meta.provider || "unknown"));
+        const model = escapeHtml(String(data.meta.model || "unknown"));
+        currentJarvisMeta = `<div class="model-footer">[Generated by ${provider} / ${model}]</div>`;
+        currentJarvisBubble.innerHTML =
+            `<span class="hud-msg-prefix">></span> ` + renderMarkdown(currentJarvisText) + currentJarvisMeta;
+        scrollToBottom();
+    } else if (data.type === "stats_data") {
+        const up = data.stats.uptime;
+        const hours = Math.floor(up / 3600).toString().padStart(2, '0');
+        const mins = Math.floor((up % 3600) / 60).toString().padStart(2, '0');
+        const secs = Math.floor(up % 60).toString().padStart(2, '0');
+        document.getElementById("uptime-value").innerText = `${hours}:${mins}:${secs}`;
+        document.getElementById("tokens-value").innerText = data.stats.total_tokens.toLocaleString();
+    } else if (data.type === "memories_data") {
+        const list = document.getElementById("memory-list");
+        list.innerHTML = "";
+        if (data.memories.length === 0) {
+            list.innerHTML = `<div style="text-align: center; color: rgba(0, 255, 255, 0.4);">No memories found.</div>`;
+        } else {
+            data.memories.forEach(m => {
+                const item = document.createElement("div");
+                item.className = "memory-item";
+                item.innerHTML = `
+                    <div class="fact-text">${escapeHtml(m.fact)}</div>
+                    <button class="delete-mem-btn" data-id="${m.id}" title="Delete">&times;</button>
+                `;
+                list.appendChild(item);
+            });
+            document.querySelectorAll(".delete-mem-btn").forEach(btn => {
+                btn.addEventListener("click", (e) => {
+                    const id = e.target.getAttribute("data-id");
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: "delete_memory", id: id }));
+                        e.target.disabled = true;
+                    }
+                });
+            });
+        }
+    } else if (data.type === "memory_added" || data.type === "memory_deleted") {
+        // refresh memories
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "get_memories", filter: memoryFilter.value }));
+        }
+    } else if (data.type === "world_monitor_data") {
+        updateWorldMonitor(data.data);
+    } else if (data.type === "open_world_monitor") {
+        worldMonitor.classList.remove("hidden");
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "get_world_monitor", refresh: true }));
+        }
     }
 }
 
@@ -119,7 +236,7 @@ function handleMessage(data) {
 function updateCoreState(stateStr) {
     aiCore.className = `ai-core ${stateStr}`;
     coreStatusText.innerText = stateStr;
-    
+
     if (stateStr === "RECORDING" || stateStr === "LISTENING") {
         micBtn.classList.add("active");
         micBtn.innerHTML = `
@@ -263,30 +380,110 @@ document.addEventListener("keyup", (e) => {
 //  Minimize / Widget Toggle
 // ========================================
 
-minimizeBtn.addEventListener("click", () => {
+minimizeBtn.addEventListener("click", async () => {
     if (isWidgetMode) return;
     isWidgetMode = true;
     document.body.classList.add("widget-mode");
-    if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.collapse_to_widget();
+    try {
+        if (!window.pywebview || !window.pywebview.api) throw new Error("Native UI bridge unavailable");
+        const collapsed = await window.pywebview.api.collapse_to_widget();
+        if (!collapsed) throw new Error("Native window rejected widget mode");
+    } catch (error) {
+        isWidgetMode = false;
+        document.body.classList.remove("widget-mode");
+        appendTerminalLog(`Failed: Widget mode unavailable (${error.message || error})`);
     }
 });
 
-aiCore.addEventListener("dblclick", () => {
+widgetExpandBtn.addEventListener("click", async (event) => {
     if (!isWidgetMode) return;
-    isWidgetMode = false;
-    document.body.classList.remove("widget-mode");
-    if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.expand_to_window();
+    event.stopPropagation();
+    try {
+        if (!window.pywebview || !window.pywebview.api) throw new Error("Native UI bridge unavailable");
+        const expanded = await window.pywebview.api.expand_to_window();
+        if (!expanded) throw new Error("Native window rejected expansion");
+        isWidgetMode = false;
+        document.body.classList.remove("widget-mode");
+    } catch (error) {
+        appendTerminalLog(`Failed: Could not restore window (${error.message || error})`);
     }
 });
 
-closeBtn.addEventListener("click", () => {
-    if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.close_app();
+document.getElementById('expand-btn').addEventListener('click', () => {
+    if (window.pywebview) pywebview.api.toggle_fullscreen();
+});
+
+document.querySelectorAll('.close-app-btn').forEach(btn => {
+    btn.addEventListener("click", () => {
+        if (window.pywebview && window.pywebview.api) {
+            window.pywebview.api.close_app();
+        }
+    });
+});
+
+
+// ========================================
+//  Dashboard Memory & Stats
+// ========================================
+
+function requestDashboardData() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "get_stats" }));
+        ws.send(JSON.stringify({ type: "get_memories", filter: memoryFilter.value }));
+    }
+}
+
+refreshMemBtn.addEventListener("click", () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "get_stats" }));
+        ws.send(JSON.stringify({ type: "get_memories", filter: memoryFilter.value }));
     }
 });
 
+memoryFilter.addEventListener("change", () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "get_memories", filter: memoryFilter.value }));
+    }
+});
+
+addMemoryBtn.addEventListener("click", () => {
+    const fact = newMemoryInput.value.trim();
+    if (fact && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "add_memory", fact: fact }));
+    }
+});
+
+newMemoryInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+        addMemoryBtn.click();
+    }
+});
+
+// Update stats every 5 seconds
+setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "get_stats" }));
+        if (!worldMonitor.classList.contains("hidden")) {
+            ws.send(JSON.stringify({ type: "get_world_monitor" }));
+        }
+    }
+}, 5000);
+
+// ========================================
+//  World Monitor
+// ========================================
+
+closeMonitorBtn.addEventListener("click", () => {
+    worldMonitor.classList.add("hidden");
+});
+
+function updateWorldMonitor(data) {
+    if (data.ram) wmRam.innerText = data.ram + "%";
+    if (data.cpu) wmCpu.innerText = data.cpu + "%";
+    if (data.weather) wmWeather.innerHTML = data.weather;
+    if (data.news) wmNews.innerHTML = data.news;
+    if (data.schedule) wmSchedule.innerHTML = data.schedule;
+}
 
 // ========================================
 //  Settings Modal
@@ -317,7 +514,8 @@ saveSettingsBtn.addEventListener("click", () => {
                 push_to_talk_key: settingHotkey.value,
                 silence_duration: parseFloat(settingSilence.value),
                 tts_voice: settingVoice.value,
-                tts_rate: settingRate.value
+                tts_rate: settingRate.value,
+                weather_city: settingWeatherCity.value.trim()
             }
         }));
     }

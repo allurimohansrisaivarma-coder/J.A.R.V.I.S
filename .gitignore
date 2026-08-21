@@ -10,6 +10,7 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+*.exe
 downloads/
 eggs/
 .eggs/
@@ -64,9 +65,13 @@ htmlcov/
 
 # Jarvis Specific
 *.spec
+!JARVIS.spec
 *.wav
+*.mp3
 .jarvis/
 .gemini/
+scratch/
+.system_generated/
 
 # OS specific
 .DS_Store

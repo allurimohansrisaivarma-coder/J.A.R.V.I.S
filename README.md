@@ -1,6 +1,6 @@
 # J.A.R.V.I.S. — Desktop Intelligence Platform
 
-A full-featured Windows desktop AI assistant with real-time voice conversations, screen understanding, file intelligence, long-term memory, and a translucent Iron Man HUD interface. Built on free-tier cloud APIs.
+A Windows 10/11 desktop AI assistant with voice conversations, screen understanding, guarded local-file intelligence, local application launching, optional long-term memory, and an Iron Man-inspired HUD. Version **0.2.0** uses Groq for ordinary work and reserves Gemini for complex reasoning and vision so free-tier usage remains practical. Cloud availability and quotas still depend on your provider accounts.
 
 ---
 
@@ -10,14 +10,16 @@ A full-featured Windows desktop AI assistant with real-time voice conversations,
 |---|---|
 | **Iron Man HUD UI** | Frameless, always-on-top pywebview window with a glowing holographic core, HUD-styled chat stream, and frosted glass aesthetic |
 | **Hold-to-Speak Voice** | Hold the mic button or **Spacebar** to speak. JARVIS listens, transcribes (Groq Whisper), responds via LLM, and speaks back (Edge TTS) |
-| **Widget Mode** | Collapse the full UI into a small floating core icon. Click it to expand back |
+| **Widget Mode** | Collapse into a draggable floating core; use its small ↗ button to restore the full HUD without accidental expansion while dragging |
 | **Live TTS Pipeline** | 3-stage async pipeline (buffer → download → play) begins with a short natural phrase and shows each phrase as its audio starts |
 | **Screen Understanding** | Ask "what's on my screen?" and JARVIS captures + analyzes your display via Gemini Vision |
 | **File Access** | JARVIS can see and read files from your Desktop, Documents, and Downloads folders |
-| **Long-Term Memory** | LanceDB vector store + SQLite metadata for persistent conversational memory across sessions, powered by semantic HyDE query expansion |
+| **Long-Term Memory** | Optional LanceDB vector store + SQLite metadata for persistent conversational memory, powered by local sentence-transformer embeddings and semantic query expansion |
 | **Google Calendar** | Read upcoming events and create new ones (requires OAuth setup — see below) |
-| **Smart Model Router** | Intent-based routing across Gemini Flash, Gemini Pro, and Groq Llama for cost-optimal inference |
-| **Web Search** | Automatic DuckDuckGo search for real-time information when needed |
+| **Smart Model Router** | Intent-based routing across Gemini 3.7 Flash reasoning levels and Groq GPT-OSS, with provider fallback and health checks |
+| **MCP Tools** | Live Web Search (DuckDuckGo), Weather, Browser integration, and a comprehensive World Monitor for global news and finance feeds |
+| **World Monitor** | Full-window system, local-weather, live-headline, and non-interactive Google Calendar overview |
+| **Windows App Launcher** | Opens installed desktop apps and Start Menu/PWA registrations locally without spending LLM tokens |
 | **Barge-In** | Speak while JARVIS is talking to interrupt and take over |
 
 ---
@@ -27,33 +29,46 @@ A full-featured Windows desktop AI assistant with real-time voice conversations,
 ### Prerequisites
 - **Python 3.11+** (tested on 3.11.9)
 - **Windows 10/11** (uses pywebview with EdgeChromium, dxcam for screen capture, pywin32)
-- API keys (both have generous free tiers):
-  - [Google Gemini](https://aistudio.google.com/apikey) — primary reasoning, vision, and streaming
-  - [Groq](https://console.groq.com/keys) — fast STT (Whisper) and lightweight LLM routing
+- API keys:
+  - [Groq](https://console.groq.com/keys) — default chat/reasoning provider and Whisper speech-to-text
+  - [Google Gemini](https://aistudio.google.com/apikey) — complex reasoning and screen/vision requests
 
 ### Installation
 
-```bash
+```powershell
 # Clone and enter the project
 cd JARVIS
 
 # Create virtual environment
-python -m venv .venv
-.venv\Scripts\activate
+py -3.11 -m venv .venv
 
-# Install the project and all dependencies
-pip install -e ".[dev]"
+# Install directly through the virtual environment (activation is optional)
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+
+# Optional only when neither an installed Google Chrome nor another supported
+# Chromium installation is available for browser automation
+.\.venv\Scripts\playwright.exe install chromium
 
 # Configure API keys
-copy .env.example .env
+Copy-Item .env.example .env
 # Edit .env with your API keys (see .env.example for details)
 
-# Run JARVIS (Terminal mode)
-jarvis
-
 # Run JARVIS (Desktop UI mode)
-jarvis --ui
+.\.venv\Scripts\python.exe -m jarvis.main --ui
 ```
+
+PowerShell activation, if desired, is `..\.venv\Scripts\Activate.ps1` only when the environment lives one directory above the project. For the documented `.venv` inside this repository, use `.\.venv\Scripts\Activate.ps1`. Calling the virtual environment's Python directly, as above, avoids execution-policy and path mistakes.
+
+## Run the packaged Windows application
+
+JARVIS is distributed as a **one-folder application** because its AI, audio, screen-capture, and MCP dependencies must remain beside the executable.
+
+1. Download `JARVIS-Windows-x64-v0.2.0.zip` from the GitHub Release.
+2. Extract the entire `JARVIS` folder. Do not copy `JARVIS.exe` out by itself.
+3. Rename `.env.example` to `.env` inside the extracted folder and add your Groq and Gemini keys.
+4. Double-click `JARVIS.exe`. A bundled executable opens the desktop UI automatically.
+
+The laptop needs 64-bit Windows 10/11, Microsoft Edge WebView2 Runtime, internet access for cloud features, and microphone permission for voice input. Google OAuth credentials remain optional and belong in `%APPDATA%\JARVIS\credentials.json`.
 
 ### Running Modes
 
@@ -90,10 +105,17 @@ src/jarvis/
 ├── memory/
 │   ├── manager.py            # MemoryManager (search + store via LanceDB)
 │   ├── extractor.py          # Background memory extraction from conversations
-│   ├── embeddings.py         # Text embeddings via Gemini embedding API
+│   ├── embeddings.py         # Local sentence-transformer embeddings (loaded lazily)
 │   └── __init__.py           # SQLite schema init
 ├── tools/
-│   └── calendar_tool.py      # Google Calendar OAuth + read/create events
+│   ├── mcp_manager.py        # Central manager for loading and registering MCP servers
+│   ├── mcp_ddg.py            # DuckDuckGo search MCP server
+│   ├── mcp_weather.py        # Weather MCP server
+│   ├── mcp_world_monitor.py  # Global news and financial feeds MCP server
+│   ├── mcp_browser.py        # Web scraping and browser automation MCP server
+│   ├── windows_launcher.py   # Safe Windows executable, Start Menu, and PWA launching
+│   ├── calendar_tool.py      # Google Calendar OAuth + read/create events
+│   └── gmail.py              # Gmail reading and drafting
 ├── ui/
 │   ├── app.py                # pywebview window + JarvisAPI bridge
 │   ├── server.py             # WebSocket server (bridges frontend ↔ backend)
@@ -120,17 +142,11 @@ JARVIS uses an **intent-based model router** that classifies each query and rout
 
 | Tier | Provider | Use Case |
 |---|---|---|
-| FAST | Groq Llama 3.1 8B | Greetings, simple questions, follow-ups |
-| STANDARD | Gemini Flash | General reasoning, coding, analysis, streaming |
-| COMPLEX | Gemini Pro | Deep reasoning, large context, vision |
+| FAST | Groq `openai/gpt-oss-20b` | Greetings and lightweight follow-ups |
+| STANDARD | Groq `openai/gpt-oss-20b` | Ordinary questions, coding, web-result summaries, Gmail, and Calendar |
+| COMPLEX | Gemini `gemini-3.7-flash` (high thinking) | Explicit deep analysis, vision, and Gemini-native desktop tools |
 
-### Free Tier Budget (Daily)
-
-| Resource | Limit | Estimated Use (200 interactions) | Headroom |
-|---|---|---|---|
-| Gemini Flash RPD | 1,500 | ~400 | 73% |
-| Groq LLM RPD | 14,400 | ~300 | 98% |
-| Gemini Pro RPD | 50 | ~5–10 | 80% |
+The default policy is **Groq-first**: both FAST and STANDARD requests use Groq, while Gemini is reserved for requests classified as COMPLEX or requiring Gemini-native vision/function calling. Gemini remains an availability fallback if Groq fails. Providers are never invoked twice during one fallback chain. Set `llm.default_provider: gemini` only if you intentionally want ordinary requests to use Gemini again.
 
 ---
 
@@ -215,7 +231,7 @@ The UI is a frameless, always-on-top pywebview window styled as an Iron Man HUD:
 - **Central Core**: Animated holographic rings that change color based on state
 - **Chat Stream**: Scrollable message area with JARVIS and user messages
 - **Input Area**: Text input + Send button + Mic button (hold to speak)
-- **Widget Mode**: Click the collapse button to shrink to a small floating core. Click the core to expand back.
+- **Widget Mode**: Click the collapse button to shrink to a small floating core. Drag anywhere on the core to move it and use the small **↗** button to restore the 1200×800 HUD.
 
 ### Core States
 
@@ -241,25 +257,33 @@ GROQ_API_KEY=your_groq_key_here
 Override any default setting:
 ```yaml
 llm:
-  default_provider: gemini
+  default_provider: groq  # recommended: preserves Gemini quota
   gemini:
-    model_flash: "gemini-3.5-flash"
-    model_pro: "gemini-3.5-flash"
+    model_flash: "gemini-3.7-flash"
+    model_pro: "gemini-3.7-flash"
+    thinking_level_standard: low
+    thinking_level_complex: high
     temperature: 0.7
   groq:
-    model: "llama-3.1-8b-instant"
+    model: "openai/gpt-oss-20b"
 
 voice:
   enabled: true
   tts_voice: "en-GB-RyanNeural"
   silence_duration: 1.5
+  stt_model: "whisper-large-v3-turbo"
+  stt_language: en
 
 memory:
-  enabled: true
+  enabled: false  # opt in; the embedding model is downloaded on first use
 
 logging:
   level: INFO
   format: json
+
+system:
+  port: 8741
+  weather_city: "Dubai"  # recommended; blank uses IP-based automatic location
 ```
 
 ---
@@ -278,19 +302,33 @@ logging:
 
 ## Development
 
-```bash
+```powershell
 # Run tests
-pytest
+.\.venv\Scripts\python.exe -m pytest
 
 # Run tests with coverage
-pytest --cov=jarvis --cov-report=term-missing
+.\.venv\Scripts\python.exe -m pytest --cov=jarvis --cov-report=term-missing
 
 # Lint
-ruff check src/ tests/
+.\.venv\Scripts\python.exe -m ruff check src tests
 
 # Type check
-mypy src/
+.\.venv\Scripts\python.exe -m mypy src
 ```
+
+### Build the Windows release
+
+```powershell
+.\.venv\Scripts\python.exe build.py
+```
+
+The release build produces:
+
+- `dist\JARVIS\JARVIS.exe` — the updated executable inside its required application folder
+- `dist\JARVIS-Windows-x64-v0.2.0.zip` — upload this to a GitHub Release
+- `dist\SHA256SUMS.txt` — integrity hashes for the executable and ZIP
+
+`dist/`, user configuration, logs, tokens, and `.env` are intentionally ignored by Git. Push the source repository normally, then attach the generated ZIP and checksum file to the corresponding GitHub Release rather than committing the large binary bundle.
 
 ---
 
@@ -300,8 +338,9 @@ All dependencies are listed in `pyproject.toml`. Key packages:
 
 | Package | Purpose |
 |---|---|
-| `google-genai` | Gemini LLM + Vision + Embeddings |
-| `groq` | Groq Whisper STT + Llama LLM |
+| `google-genai` | Gemini LLM, tool calling, and Vision |
+| `groq` | Groq Whisper STT + GPT-OSS LLM |
+| `sentence-transformers` | Local semantic embeddings for optional memory |
 | `pywebview` | Desktop window (EdgeChromium backend) |
 | `websockets` | Frontend ↔ Backend communication |
 | `edge-tts` | Free Microsoft Text-to-Speech |
@@ -314,6 +353,19 @@ All dependencies are listed in `pyproject.toml`. Key packages:
 | `pynput` | Global hotkey listener |
 | `google-api-python-client` | Google Calendar/Gmail API |
 | `google-auth-oauthlib` | OAuth 2.0 authentication flow |
+| `mcp` | Model Context Protocol server/client support |
+| `ddgs` | DuckDuckGo web search tool |
+| `httpx` | Async HTTP requests for news and feeds |
+
+### Privacy and safety boundaries
+
+- Local-file context is restricted to the configured project/user roots, resolves symlinks before access, bounds recursive scans, and never returns known secret files such as `.env`, OAuth tokens, or credential files.
+- Generic questions are not automatically sent to web search. Search runs only for explicit or clearly time-sensitive requests.
+- Live web retrieval uses one bounded MCP search per request, with a four-second search timeout and no repeated Gemini search loop.
+- Set `system.weather_city` to avoid IP-based location lookup. When it is blank, World Monitor uses ipwho.is with ipapi.co fallback to approximate local weather before querying Open-Meteo.
+- Gmail sends only a previously created draft after a separate explicit confirmation. Long-term-memory deletion likewise requires a preview followed by confirmation.
+- API keys come from environment variables or `.env`; saving YAML configuration does not serialize them.
+- Explicit app-launch commands are resolved locally against approved Windows executables and registered Start Menu/PWA shortcuts; they do not consume Groq or Gemini tokens.
 
 ---
 

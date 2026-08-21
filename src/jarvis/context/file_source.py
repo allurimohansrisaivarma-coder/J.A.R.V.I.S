@@ -1,4 +1,4 @@
-"""Local file context source — full desktop access."""
+"""Safe local-file context for user-approved directories."""
 
 import re
 from pathlib import Path
@@ -9,8 +9,8 @@ from jarvis.context.base import ContextSource
 
 logger = structlog.get_logger(__name__)
 
-# Directories JARVIS is allowed to scan and read
 USER_HOME = Path.home()
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ALLOWED_ROOTS = [
     USER_HOME / "Desktop",
     USER_HOME / "Documents",
@@ -18,161 +18,259 @@ ALLOWED_ROOTS = [
     USER_HOME / "OneDrive" / "Desktop",
     USER_HOME / "OneDrive" / "Documents",
     USER_HOME / "JarvisWorkspace",
-    Path("C:/Users/allur_we/OneDrive/Desktop/Projects/PERSONAL/JARVIS"), # Source code
-    Path("C:/Users/allur_we/.gemini/antigravity-ide/brain"), # Logs / Antigravity data
+    PROJECT_ROOT,
 ]
 
-# File extensions we can safely read as text
 TEXT_EXTENSIONS = {
-    ".txt", ".md", ".py", ".js", ".ts", ".html", ".css", ".json", ".yaml", ".yml",
-    ".csv", ".xml", ".toml", ".cfg", ".ini", ".log", ".sh", ".bat", ".ps1",
-    ".java", ".c", ".cpp", ".h", ".hpp", ".rs", ".go", ".rb", ".php",
-    ".sql", ".env", ".gitignore", ".dockerfile",
+    ".txt",
+    ".md",
+    ".py",
+    ".js",
+    ".ts",
+    ".html",
+    ".css",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".csv",
+    ".xml",
+    ".toml",
+    ".cfg",
+    ".ini",
+    ".log",
+    ".sh",
+    ".bat",
+    ".ps1",
+    ".java",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".rs",
+    ".go",
+    ".rb",
+    ".php",
+    ".sql",
+    ".gitignore",
+    ".dockerfile",
 }
-
-# Max depth to prevent scanning massive trees
+SENSITIVE_FILENAMES = {
+    ".env",
+    ".env.local",
+    ".env.production",
+    "credentials.json",
+    "token.json",
+    "client_secret.json",
+    "secrets.yaml",
+    "secrets.yml",
+}
 MAX_DEPTH = 4
 MAX_FILES_LISTED = 40
+MAX_FILES_SCANNED = 1000
+MAX_TEXT_CHARS = 15_000
 
 
 class FileContextSource(ContextSource):
-    """Reads local files from the user's Desktop, Documents, and Downloads."""
+    """Reads safe text and metadata only from approved local roots."""
 
     @property
     def name(self) -> str:
         return "Local Files"
 
     async def can_handle(self, query: str) -> bool:
-        """Trigger on file/folder/path keywords OR explicit path separators."""
+        """Trigger only for an explicit path or a clear local-file request."""
         q = query.lower()
-        triggers = [
-            "file", "folder", "directory", "desktop", "document", "download",
-            "read", "open", "list", "show me", "what's on", "what is on",
-            "code", "repo", "architecture", "log", "capabilities", "readme",
-        ]
-        return any(t in q for t in triggers) or "\\" in query or "/" in query
+        triggers = (
+            "file",
+            "folder",
+            "directory",
+            "desktop",
+            "documents",
+            "downloads",
+            "readme",
+            "local path",
+            "project files",
+            "repo files",
+            "source code",
+        )
+        return any(term in q for term in triggers) or self._extract_path(query) is not None
 
-    async def gather_context(self, query: str, **kwargs) -> str:
+    async def gather_context(self, query: str, **kwargs: object) -> str:
         q = query.lower()
-
-        # 1. Check if query contains an explicit absolute path
         explicit_path = self._extract_path(query)
-        if explicit_path and explicit_path.exists():
+        if explicit_path is not None:
+            if not self._is_allowed(explicit_path):
+                return "That path is outside the local directories JARVIS is allowed to access."
+            if not explicit_path.exists():
+                return f"Local path not found: {explicit_path}"
             if explicit_path.is_file():
                 return self._read_file(explicit_path)
-            elif explicit_path.is_dir():
+            if explicit_path.is_dir():
                 return self._list_directory(explicit_path)
 
-        # 2. Determine which roots to scan based on keywords
-        roots_to_scan = []
         if "desktop" in q:
-            roots_to_scan = [r for r in ALLOWED_ROOTS if "desktop" in str(r).lower()]
+            roots_to_scan = [root for root in ALLOWED_ROOTS if "desktop" in str(root).lower()]
         elif "document" in q:
-            roots_to_scan = [r for r in ALLOWED_ROOTS if "document" in str(r).lower()]
+            roots_to_scan = [root for root in ALLOWED_ROOTS if "document" in str(root).lower()]
         elif "download" in q:
-            roots_to_scan = [r for r in ALLOWED_ROOTS if "download" in str(r).lower()]
+            roots_to_scan = [root for root in ALLOWED_ROOTS if "download" in str(root).lower()]
         else:
             roots_to_scan = ALLOWED_ROOTS
 
-        # 3. Gather all files across the selected roots
-        all_files = []
+        all_files: list[Path] = []
         for root in roots_to_scan:
-            if root.exists():
-                all_files.extend(self._walk(root, depth=0))
+            if root.exists() and self._is_allowed(root):
+                remaining = MAX_FILES_SCANNED - len(all_files)
+                all_files.extend(self._walk(root, depth=0, remaining=remaining))
+            if len(all_files) >= MAX_FILES_SCANNED:
+                break
 
         if not all_files:
-            searched = ", ".join(str(r) for r in roots_to_scan)
-            return f"No files found in: {searched}"
+            return "No matching files were found in the approved local directories."
 
-        # 4. Match meaningful query terms against normalised filenames.  This
-        # lets "my CV" find "mycv.pdf" without reading binary files or
-        # dumping their contents into the model context.
+        ignored_terms = {
+            "can",
+            "you",
+            "the",
+            "where",
+            "have",
+            "file",
+            "saved",
+            "save",
+            "desktop",
+            "please",
+            "what",
+            "which",
+            "with",
+            "from",
+            "that",
+            "this",
+            "there",
+            "my",
+            "is",
+            "read",
+            "open",
+            "show",
+            "me",
+            "code",
+            "project",
+            "folder",
+            "documents",
+            "downloads",
+        }
         query_terms = {
             re.sub(r"[^a-z0-9]", "", term)
             for term in re.findall(r"[a-z0-9]+", q)
-            if len(term) >= 2
-            and term not in {
-                "can", "you", "the", "where", "have", "file", "saved", "save", "desktop",
-                "please", "what", "which", "with", "from", "that", "this", "there", "my", "is",
-                "read", "open", "show", "me", "log", "code", "architecture"
-            }
+            if len(term) >= 2 and term not in ignored_terms
         }
-        mentioned = []
-        for file_path in all_files:
-            normalised_name = re.sub(r"[^a-z0-9]", "", file_path.stem.lower())
-            if any(term in normalised_name for term in query_terms):
-                mentioned.append(file_path)
+        mentioned = [
+            path
+            for path in all_files
+            if any(term in re.sub(r"[^a-z0-9]", "", path.stem.lower()) for term in query_terms)
+        ]
 
-        if "capabilities" in q or "readme" in q:
-            readme_path = Path("C:/Users/allur_we/OneDrive/Desktop/Projects/PERSONAL/JARVIS/README.md")
-            if readme_path.exists() and readme_path not in mentioned:
-                mentioned.append(readme_path)
+        if "readme" in q and PROJECT_ROOT / "README.md" not in mentioned:
+            mentioned.append(PROJECT_ROOT / "README.md")
 
         if mentioned:
-            matches = "\n".join(self._describe_file(file_path) for file_path in mentioned[:5])
-            return f"Matching local files:\n{matches}"
+            matches = mentioned[:5]
+            wants_contents = any(
+                term in q for term in ("read ", "contents", "what does", "show me")
+            )
+            if wants_contents and len(matches) == 1 and self._is_readable_text(matches[0]):
+                return self._read_file(matches[0])
+            return "Matching local files:\n" + "\n".join(
+                self._describe_file(path) for path in matches
+            )
 
-        # 5. Fallback: list available files
         lines = []
-        for f in all_files[:MAX_FILES_LISTED]:
-            # Show path relative to home for readability
+        for path in all_files[:MAX_FILES_LISTED]:
             try:
-                rel = f.relative_to(USER_HOME)
+                display = Path("~") / path.relative_to(USER_HOME)
             except ValueError:
-                rel = f
-            lines.append(f"  - ~/{rel}")
-
-        header = f"Files available on the user's system ({len(all_files)} total, showing first {min(len(all_files), MAX_FILES_LISTED)}):"
-        return header + "\n" + "\n".join(lines)
-
-    # ── Helpers ──
+                display = path
+            lines.append(f"  - {display}")
+        return (
+            f"Files available in approved directories ({len(all_files)} found, showing "
+            f"{len(lines)}):\n" + "\n".join(lines)
+        )
 
     def _extract_path(self, query: str) -> Path | None:
-        """Try to find an absolute path in the query string."""
-        import re
-        # Match Windows paths like C:\... or Unix paths like /home/...
-        match = re.search(r'([A-Za-z]:\\[^\s"\']+|/[^\s"\']+)', query)
+        """Extract a quoted or unquoted absolute Windows/Unix path."""
+        quoted = re.search(r"[\"']([A-Za-z]:[\\/][^\"']+|/[^\"']+)[\"']", query)
+        if quoted:
+            return Path(quoted.group(1))
+        match = re.search(r"([A-Za-z]:[\\/][^\r\n,;]+|/(?:[^\s\"']+/?)+)", query)
         if match:
-            return Path(match.group(1))
+            return Path(match.group(1).strip().rstrip(".?!"))
         return None
 
-    def _walk(self, root: Path, depth: int) -> list[Path]:
-        """Recursively list files up to MAX_DEPTH."""
-        if depth > MAX_DEPTH:
+    @staticmethod
+    def _resolved(path: Path) -> Path:
+        return path.expanduser().resolve(strict=False)
+
+    def _is_allowed(self, path: Path) -> bool:
+        resolved = self._resolved(path)
+        return any(resolved.is_relative_to(self._resolved(root)) for root in ALLOWED_ROOTS)
+
+    @staticmethod
+    def _is_sensitive(path: Path) -> bool:
+        name = path.name.lower()
+        return name in SENSITIVE_FILENAMES or name.startswith(".env.") or "credential" in name
+
+    def _is_readable_text(self, path: Path) -> bool:
+        return (
+            self._is_allowed(path)
+            and not self._is_sensitive(path)
+            and path.suffix.lower() in TEXT_EXTENSIONS
+        )
+
+    def _walk(self, root: Path, depth: int, remaining: int) -> list[Path]:
+        """Recursively list a bounded number of files without crossing allowed roots."""
+        if depth > MAX_DEPTH or remaining <= 0 or not self._is_allowed(root):
             return []
-        files = []
+        files: list[Path] = []
         try:
             for entry in root.iterdir():
-                # Skip hidden files/dirs
-                if entry.name.startswith("."):
+                if len(files) >= remaining:
+                    break
+                if entry.name.startswith(".") or not self._is_allowed(entry):
                     continue
-                if entry.is_file():
+                if entry.is_file() and not self._is_sensitive(entry):
                     files.append(entry)
                 elif entry.is_dir() and not entry.name.startswith("__"):
-                    files.extend(self._walk(entry, depth + 1))
+                    files.extend(self._walk(entry, depth + 1, remaining - len(files)))
         except PermissionError:
-            pass
-        except Exception as e:
-            logger.debug("Error scanning directory", path=str(root), error=str(e))
+            logger.debug("Directory access denied", path=str(root))
+        except OSError as exc:
+            logger.debug("Error scanning directory", path=str(root), error=str(exc))
         return files
 
     def _read_file(self, path: Path) -> str:
-        """Read a single file, returning its content or a description."""
-        if path.suffix.lower() not in TEXT_EXTENSIONS:
-            size_kb = path.stat().st_size / 1024
-            return f"File: {path.name} ({path.suffix}, {size_kb:.1f} KB) — binary file, cannot display contents."
-
+        if not self._is_allowed(path):
+            return "That path is outside the local directories JARVIS is allowed to access."
+        if self._is_sensitive(path):
+            return f"File: {path.name} — contents are protected because this may contain secrets."
+        if not self._is_readable_text(path):
+            try:
+                size_kb = path.stat().st_size / 1024
+            except OSError:
+                size_kb = 0
+            return (
+                f"File: {path.name} ({path.suffix or 'unknown'}, {size_kb:.1f} KB) — "
+                "binary or unsupported text format."
+            )
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
-            if len(content) > 15000:
-                content = content[:15000] + "\n...[TRUNCATED]"
+            if len(content) > MAX_TEXT_CHARS:
+                content = content[:MAX_TEXT_CHARS] + "\n...[TRUNCATED]"
             return f"File: {path}\n```\n{content}\n```"
-        except Exception as e:
-            return f"File: {path}\n[Error reading: {e}]"
+        except OSError as exc:
+            logger.warning("Failed to read local file", path=str(path), error=str(exc))
+            return f"File: {path}\n[Unable to read file]"
 
     @staticmethod
     def _describe_file(path: Path) -> str:
-        """Return safe metadata for a found file, never its raw content."""
         try:
             size_kb = path.stat().st_size / 1024
             return f"- {path} ({path.suffix.upper().lstrip('.') or 'file'}, {size_kb:.1f} KB)"
@@ -180,18 +278,23 @@ class FileContextSource(ContextSource):
             return f"- {path}"
 
     def _list_directory(self, directory: Path) -> str:
-        """List the contents of a specific directory."""
+        if not self._is_allowed(directory):
+            return "That path is outside the local directories JARVIS is allowed to access."
         try:
-            entries = sorted(directory.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+            entries = [
+                entry
+                for entry in directory.iterdir()
+                if not entry.name.startswith(".")
+                and not self._is_sensitive(entry)
+                and self._is_allowed(entry)
+            ]
+            entries.sort(key=lambda path: (not path.is_dir(), path.name.lower()))
             lines = []
             for entry in entries[:MAX_FILES_LISTED]:
-                prefix = "📁" if entry.is_dir() else "📄"
-                size = ""
-                if entry.is_file():
-                    size_kb = entry.stat().st_size / 1024
-                    size = f" ({size_kb:.1f} KB)"
-                lines.append(f"  {prefix} {entry.name}{size}")
-            header = f"Contents of {directory} ({len(entries)} items):"
-            return header + "\n" + "\n".join(lines)
-        except Exception as e:
-            return f"Error listing {directory}: {e}"
+                size = f" ({entry.stat().st_size / 1024:.1f} KB)" if entry.is_file() else ""
+                kind = "[DIR]" if entry.is_dir() else "[FILE]"
+                lines.append(f"  {kind} {entry.name}{size}")
+            return f"Contents of {directory} ({len(entries)} items):\n" + "\n".join(lines)
+        except OSError as exc:
+            logger.warning("Failed to list local directory", path=str(directory), error=str(exc))
+            return f"Unable to list {directory}."

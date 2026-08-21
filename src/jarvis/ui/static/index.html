@@ -27,6 +27,11 @@
                         <line x1="3" y1="21" x2="10" y2="14"></line>
                     </svg>
                 </button>
+                <button id="expand-btn" class="hud-icon-btn" title="Toggle Fullscreen">
+                    <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+                    </svg>
+                </button>
                 <button id="close-btn" class="hud-icon-btn close-app-btn" title="Close JARVIS">
                     <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -36,59 +41,138 @@
             </div>
         </div>
 
-        <!-- Central Holographic Core -->
-        <div class="ai-core-container">
-            <div id="ai-core" class="ai-core IDLE">
-                <!-- Minimalist JARVIS SVG Core -->
-                <svg class="core-svg" viewBox="0 0 100 100">
-                    <!-- Outer rotating ring with gaps -->
-                    <circle class="svg-ring outer" cx="50" cy="50" r="46" stroke-dasharray="60 10" />
-                    <circle class="svg-ring outer-reverse" cx="50" cy="50" r="42" stroke-dasharray="30 5" />
-                    <!-- Middle data ring -->
-                    <circle class="svg-ring middle" cx="50" cy="50" r="32" stroke-dasharray="4 8" />
-                    <!-- Inner solid ring -->
-                    <circle class="svg-ring inner" cx="50" cy="50" r="22" stroke-dasharray="80 20" />
-                    <!-- Core pulsing center -->
-                    <circle class="svg-center" cx="50" cy="50" r="8" />
-                    <!-- Decorative crosshairs -->
-                    <line x1="50" y1="2" x2="50" y2="8" class="svg-crosshair" />
-                    <line x1="50" y1="92" x2="50" y2="98" class="svg-crosshair" />
-                    <line x1="2" y1="50" x2="8" y2="50" class="svg-crosshair" />
-                    <line x1="92" y1="50" x2="98" y2="50" class="svg-crosshair" />
-                </svg>
+        <div class="dashboard-grid">
+            <!-- Left Panel (Chat) -->
+            <div class="panel left-panel">
+                <!-- Chat Stream -->
+                <main id="chat-container" class="hud-chat-stream">
+                    <div class="hud-message system">
+                        <span class="hud-msg-prefix">></span> SYSTEM INITIALIZED. WELCOME, SIR.
+                    </div>
+                </main>
+
+                <footer class="hud-input-area">
+                    <div class="hud-input-box">
+                        <span class="hud-prompt">></span>
+                        <textarea id="message-input" placeholder="INPUT COMMAND..." rows="1"></textarea>
+                        <button id="mic-btn" class="hud-icon-btn mic" title="Hold to Speak (or hold Spacebar)">
+                            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                <line x1="12" y1="19" x2="12" y2="23"></line>
+                                <line x1="8" y1="23" x2="16" y2="23"></line>
+                            </svg>
+                        </button>
+                        <button id="send-btn" class="hud-icon-btn send" title="Transmit">
+                            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="22" y1="2" x2="11" y2="13"></line>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                            </svg>
+                        </button>
+                    </div>
+                </footer>
             </div>
-            <div id="core-status-text" class="core-status-text">STANDBY</div>
+
+            <!-- Center Panel -->
+            <div class="panel center-panel">
+                <div class="ai-core-container">
+                    <button id="widget-expand-btn" class="widget-expand-btn" title="Restore JARVIS" aria-label="Restore JARVIS">↗</button>
+                    <div id="ai-core" class="ai-core IDLE">
+                        <svg class="core-svg" viewBox="0 0 100 100">
+                            <circle class="svg-ring outer" cx="50" cy="50" r="46" stroke-dasharray="60 10" />
+                            <circle class="svg-ring outer-reverse" cx="50" cy="50" r="42" stroke-dasharray="30 5" />
+                            <circle class="svg-ring middle" cx="50" cy="50" r="32" stroke-dasharray="4 8" />
+                            <circle class="svg-ring inner" cx="50" cy="50" r="22" stroke-dasharray="80 20" />
+                            <circle class="svg-center" cx="50" cy="50" r="8" />
+                            <line x1="50" y1="2" x2="50" y2="8" class="svg-crosshair" />
+                            <line x1="50" y1="92" x2="50" y2="98" class="svg-crosshair" />
+                            <line x1="2" y1="50" x2="8" y2="50" class="svg-crosshair" />
+                            <line x1="92" y1="50" x2="98" y2="50" class="svg-crosshair" />
+                        </svg>
+                    </div>
+                    <div id="core-status-text" class="core-status-text">STANDBY</div>
+                </div>
+            </div>
+
+            <!-- Right Panel -->
+            <div class="panel right-panel">
+                <div class="terminal-header">
+                    <span class="terminal-title">BACKGROUND EXECUTOR // LOGS</span>
+                    <span class="terminal-blink">_</span>
+                </div>
+                <main id="terminal-container" class="terminal-log-stream">
+                    <div class="terminal-line">[INFO] Subsystem routing established.</div>
+                </main>
+
+                <!-- SYSTEM STATS & MEMORY (Bottom of Right Panel) -->
+                <div class="dashboard-stats-memory">
+                    <div class="stats-row">
+                        <div class="stat-item">
+                            <span class="stat-label">UPTIME</span>
+                            <span class="stat-value" id="uptime-value">00:00:00</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">TOKENS</span>
+                            <span class="stat-value" id="tokens-value">0</span>
+                        </div>
+                    </div>
+
+                    <div class="memory-dashboard-section">
+                        <div class="memory-header-row">
+                            <span class="terminal-title">LONG-TERM MEMORY</span>
+                            <select id="memory-filter" class="hud-select">
+                                <option value="all">All Time</option>
+                                <option value="24h">Last 24 Hours</option>
+                                <option value="1h">Last 1 Hour</option>
+                            </select>
+                            <button id="refresh-mem-btn" class="hud-icon-btn small-btn" title="Refresh">
+                                <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                            </button>
+                        </div>
+
+                        <div class="add-memory-box dashboard-mem-input">
+                            <input type="text" id="new-memory-input" placeholder="Add manual memory fact..." style="flex-grow: 1;">
+                            <button id="add-memory-btn" class="hud-primary-btn" style="padding: 2px 8px; width: auto; min-height: auto; font-size: 0.7rem; margin-top: 0;">ADD</button>
+                        </div>
+
+                        <div class="memory-list dashboard-mem-list" id="memory-list">
+                            <div style="text-align: center; color: rgba(0, 255, 255, 0.4);">Loading memories...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
-        
-        <!-- Floating Chat Data Stream -->
-        <main id="chat-container" class="hud-chat-stream">
-            <div class="hud-message system">
-                <span class="hud-msg-prefix">></span> SYSTEM INITIALIZED. WELCOME, SIR.
+
+        <!-- Full-window World Monitor Dashboard (Hidden by default) -->
+        <section id="world-monitor" class="world-monitor-container hidden" aria-label="World Monitor">
+            <div class="wm-header">
+                <div>
+                    <div class="wm-kicker">JARVIS GLOBAL OPERATIONS</div>
+                    <h2>WORLD MONITOR</h2>
+                </div>
+                <button id="close-monitor-btn" class="hud-icon-btn small-btn" aria-label="Close World Monitor">&times;</button>
             </div>
-        </main>
-        
-        <!-- Input Area HUD -->
-        <footer class="hud-input-area">
-            <div class="hud-input-box">
-                <span class="hud-prompt">></span>
-                <textarea id="message-input" placeholder="INPUT COMMAND..." rows="1"></textarea>
-                <button id="mic-btn" class="hud-icon-btn mic" title="Hold to Speak (or hold Spacebar)">
-                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
-                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-                        <line x1="12" y1="19" x2="12" y2="23"></line>
-                        <line x1="8" y1="23" x2="16" y2="23"></line>
-                    </svg>
-                </button>
-                <button id="send-btn" class="hud-icon-btn send" title="Transmit">
-                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="22" y1="2" x2="11" y2="13"></line>
-                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                    </svg>
-                </button>
+            <div class="wm-grid">
+                <article class="wm-card">
+                    <h3>SYSTEM RESOURCES</h3>
+                    <div class="wm-stat">RAM: <span id="wm-ram">--%</span></div>
+                    <div class="wm-stat">CPU: <span id="wm-cpu">--%</span></div>
+                </article>
+                <article class="wm-card">
+                    <h3>LOCAL WEATHER</h3>
+                    <div id="wm-weather" class="wm-content">Resolving local weather...</div>
+                </article>
+                <article class="wm-card wm-wide">
+                    <h3>GLOBAL INTELLIGENCE</h3>
+                    <div id="wm-news" class="wm-content">Loading...</div>
+                </article>
+                <article class="wm-card wm-wide">
+                    <h3>GOOGLE CALENDAR</h3>
+                    <div id="wm-schedule" class="wm-content">Checking calendar connection...</div>
+                </article>
             </div>
-        </footer>
-        
+        </section>
+
         <!-- Settings Modal -->
         <div id="settings-modal" class="modal hidden">
             <div class="modal-content hud-modal">
@@ -113,10 +197,16 @@
                         <label for="setting-rate">SPEECH VELOCITY</label>
                         <input type="text" id="setting-rate" value="+20%" pattern="[+-][0-9]+%">
                     </div>
+                    <div class="form-group">
+                        <label for="setting-weather-city">LOCAL WEATHER CITY (AUTO-DETECT IF BLANK)</label>
+                        <input type="text" id="setting-weather-city" placeholder="e.g. Dubai">
+                    </div>
                     <button id="save-settings-btn" class="hud-primary-btn">INITIALIZE OVERRIDE</button>
                 </div>
             </div>
         </div>
+
+
     </div>
     <script src="app.js"></script>
 </body>

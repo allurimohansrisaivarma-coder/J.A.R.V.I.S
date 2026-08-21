@@ -1,14 +1,17 @@
 # Internal Jarvis defaults
 
 llm:
-  default_provider: gemini
+  # Keep ordinary chat on Groq. Gemini is reserved for the COMPLEX tier.
+  default_provider: groq
   gemini:
-    model_flash: gemini-3.5-flash
-    model_pro: gemini-3.5-flash
+    model_flash: gemini-3.7-flash
+    model_pro: gemini-3.7-flash
+    thinking_level_standard: low
+    thinking_level_complex: high
     temperature: 0.7
     max_output_tokens: 2048
   groq:
-    model: llama-3.1-8b-instant
+    model: openai/gpt-oss-20b
     temperature: 0.3
     max_output_tokens: 1024
 
@@ -23,6 +26,8 @@ voice:
   tts_voice: en-GB-RyanNeural
   tts_rate: "+20%"
   tts_pitch: "-5Hz"
+  stt_model: whisper-large-v3-turbo
+  stt_language: en
   silence_duration: 0.55
 
 memory:
@@ -39,3 +44,4 @@ logging:
 
 system:
   port: 8741
+  weather_city: ""

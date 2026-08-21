@@ -1,7 +1,8 @@
 """Tests for the model router."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
+
+import pytest
 
 from jarvis.config.settings import RouterSettings
 from jarvis.llm.base import (
@@ -47,7 +48,7 @@ def full_router(router_settings: RouterSettings) -> ModelRouter:
     """Create a router with all three tiers configured."""
     providers = {
         ModelTier.FAST: _make_mock_provider("groq", ModelTier.FAST),
-        ModelTier.STANDARD: _make_mock_provider("gemini-flash", ModelTier.STANDARD),
+        ModelTier.STANDARD: _make_mock_provider("groq-standard", ModelTier.STANDARD),
         ModelTier.COMPLEX: _make_mock_provider("gemini-pro", ModelTier.COMPLEX),
     }
     return ModelRouter(providers=providers, settings=router_settings)
@@ -80,7 +81,7 @@ class TestIntentClassification:
     @pytest.mark.asyncio
     async def test_complex_keyword_routes_to_complex(self, full_router: ModelRouter):
         """Messages with complexity keywords should route to COMPLEX."""
-        messages = [Message.user("Analyze the performance characteristics of this algorithm")]
+        messages = [Message.user("Analyze in detail the performance of this algorithm")]
         tier = await full_router._classify_intent(messages)
         assert tier == ModelTier.COMPLEX
 
@@ -110,10 +111,10 @@ class TestRouting:
 
     @pytest.mark.asyncio
     async def test_standard_route(self, full_router: ModelRouter):
-        """Standard queries should route to gemini-flash."""
+        """Standard queries should route to Groq."""
         messages = [Message.user("How do I create a class in Python?")]
         response = await full_router.route(messages)
-        assert response.provider == "gemini-flash"
+        assert response.provider == "groq-standard"
 
     @pytest.mark.asyncio
     async def test_fallback_on_provider_error(self, full_router: ModelRouter):
@@ -125,7 +126,7 @@ class TestRouting:
         )
         # generate_with_fallback should fall back to STANDARD
         response = await full_router.generate_with_fallback(messages)
-        assert response.provider == "gemini-flash"
+        assert response.provider == "groq-standard"
 
     @pytest.mark.asyncio
     async def test_all_providers_fail_raises(self, full_router: ModelRouter):
@@ -157,3 +158,16 @@ class TestProviderHealth:
         full_router._record_failure(ModelTier.FAST)
         full_router._record_failure(ModelTier.FAST)
         assert full_router._is_provider_healthy(ModelTier.FAST) is True
+
+    def test_model_protocol_error_does_not_quarantine_provider(self):
+        """A bad model response is not evidence that the API is unavailable."""
+
+        class ProtocolError(Exception):
+            status_code = 400
+
+        assert ModelRouter._should_record_failure(ProtocolError("bad tool call")) is False
+
+    def test_rate_limit_does_quarantine_provider(self):
+        from jarvis.llm.base import RateLimitError
+
+        assert ModelRouter._should_record_failure(RateLimitError("limited")) is True

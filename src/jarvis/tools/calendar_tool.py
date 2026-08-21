@@ -20,14 +20,23 @@ class GoogleCalendarTool:
         self.service = None
         self.timezone = "UTC"
 
-    def authenticate(self) -> None:
+    def authenticate(self, interactive: bool = True) -> bool:
         if self.service is None:
-            self.service = GoogleOAuth("calendar", "v3", SCOPES).build_service()
+            self.service = GoogleOAuth("calendar", "v3", SCOPES).build_service(
+                interactive=interactive
+            )
+            if self.service is None:
+                return False
             try:
-                self.timezone = self.service.settings().get(setting="timezone").execute().get("value", "UTC")
+                service = self.service
+                assert service is not None
+                self.timezone = (
+                    service.settings().get(setting="timezone").execute().get("value", "UTC")
+                )
             except HttpError:
                 # Calendar accepts RFC3339 offsets even if this optional lookup fails.
                 self.timezone = "UTC"
+        return True
 
     def _service(self):
         self.authenticate()
@@ -50,34 +59,50 @@ class GoogleCalendarTool:
 
     def get_upcoming_events(self, max_results: int = 10) -> str:
         try:
-            events = self._service().events().list(
-                calendarId="primary", timeMin=datetime.now(UTC).isoformat(),
-                maxResults=max(1, min(max_results, 25)), singleEvents=True,
-                orderBy="startTime", timeZone=self.timezone,
-            ).execute().get("items", [])
+            events = (
+                self._service()
+                .events()
+                .list(
+                    calendarId="primary",
+                    timeMin=datetime.now(UTC).isoformat(),
+                    maxResults=max(1, min(max_results, 25)),
+                    singleEvents=True,
+                    orderBy="startTime",
+                    timeZone=self.timezone,
+                )
+                .execute()
+                .get("items", [])
+            )
             if not events:
                 return "No upcoming events found."
             return "Upcoming events:\n" + "\n".join(
                 f"- {item.get('start', {}).get('dateTime', item.get('start', {}).get('date'))}: "
-                f"{item.get('summary', 'No Title')}" for item in events
+                f"{item.get('summary', 'No Title')}"
+                for item in events
             )
         except HttpError as error:
-            raise CalendarOperationError(f"Calendar could not list upcoming events: {error}") from error
+            raise CalendarOperationError(
+                f"Calendar could not list upcoming events: {error}"
+            ) from error
 
-    def create_event(self, summary: str, start_time: str, end_time: str = "", description: str = "") -> str:
+    def create_event(
+        self, summary: str, start_time: str, end_time: str = "", description: str = ""
+    ) -> str:
         start = self._parse_datetime(start_time, "Start time")
         if not end_time:
             from datetime import timedelta
+
             end = start + timedelta(hours=1)
         else:
             end = self._parse_datetime(end_time, "End time")
-            
+
         if end <= start:
             raise CalendarOperationError("The event end time must be after its start time.")
         if not (summary or "").strip():
             raise CalendarOperationError("A calendar event needs a title.")
         event = {
-            "summary": summary.strip(), "description": description or "",
+            "summary": summary.strip(),
+            "description": description or "",
             "start": {"dateTime": start.isoformat(), "timeZone": self.timezone},
             "end": {"dateTime": end.isoformat(), "timeZone": self.timezone},
         }

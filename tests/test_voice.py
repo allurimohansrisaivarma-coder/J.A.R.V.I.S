@@ -1,13 +1,15 @@
 """Tests for the voice interface modules."""
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from jarvis.voice.manager import VoiceManager, VoiceState
+import pytest
+
 from jarvis.core.session import SessionManager
+from jarvis.voice.manager import VoiceManager, VoiceState
 from jarvis.voice.stt import STTProvider
 from jarvis.voice.tts import TTSProvider
+
 
 @pytest.fixture
 def mock_session():
@@ -15,17 +17,20 @@ def mock_session():
     session.process_input = AsyncMock(return_value="Hello there.")
     return session
 
+
 @pytest.fixture
 def mock_stt():
     stt = MagicMock(spec=STTProvider)
     stt.transcribe = AsyncMock(return_value="Hi Jarvis")
     return stt
 
+
 @pytest.fixture
 def mock_tts():
     tts = MagicMock(spec=TTSProvider)
     tts.speak = AsyncMock()
     return tts
+
 
 @pytest.fixture
 def voice_manager(mock_session, mock_stt, mock_tts):
@@ -39,32 +44,39 @@ def voice_manager(mock_session, mock_stt, mock_tts):
     manager.capture.listen_for_speech = AsyncMock(side_effect=wait_for_audio)
     return manager
 
+
 def test_initial_state(voice_manager):
     """Test the initial state is IDLE."""
     assert voice_manager.state == VoiceState.IDLE
+
 
 @pytest.mark.asyncio
 async def test_ptt_loop_cancellation(voice_manager):
     """Test that the push-to-talk loop exits gracefully when cancelled."""
     # Start loop in a task
     import asyncio
+
     task = asyncio.create_task(voice_manager.start_ptt_loop())
-    
+
     # Wait a tiny bit for it to enter the loop
     await asyncio.sleep(0.01)
     assert voice_manager.state == VoiceState.IDLE
-    
+
     # Stop it
     voice_manager.stop()
     await task
-    
+
     # Should revert to IDLE
     assert voice_manager.state == VoiceState.IDLE
 
 
 def test_phrase_buffer_starts_before_a_long_sentence():
     """The first spoken phrase should not wait for a long sentence to end."""
-    text = "This is a deliberately long response without terminal punctuation yet " + "and it keeps going " * 12 + "."
+    text = (
+        "This is a deliberately long response without terminal punctuation yet "
+        + "and it keeps going " * 12
+        + "."
+    )
     phrase, remainder = TTSProvider._take_phrase(text, final=False, target=72)
 
     assert phrase is not None
@@ -111,16 +123,18 @@ async def test_interrupt_stops_active_speech(mock_session, mock_stt, mock_tts):
         await manager._active_speak_task
     mock_tts.stop.assert_called_once()
 
+
 def test_state_callbacks(voice_manager):
     """Test that state callbacks are triggered properly."""
     callbacks = []
+
     def callback(state):
         callbacks.append(state)
-        
+
     voice_manager.on_state_change = callback
-    
+
     voice_manager._set_state(VoiceState.LISTENING)
     assert callbacks == [VoiceState.LISTENING]
-    
+
     voice_manager._set_state(VoiceState.THINKING)
     assert callbacks == [VoiceState.LISTENING, VoiceState.THINKING]

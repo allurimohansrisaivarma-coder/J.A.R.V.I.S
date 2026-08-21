@@ -15,9 +15,11 @@ You remember context from the current conversation and use it to provide relevan
 When you don't know something, say so honestly rather than guessing.
 Keep responses concise unless the user asks for detail."""
 
+
 @dataclass
 class Conversation:
     """Represents a single conversation session."""
+
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     messages: list[Message] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -52,16 +54,16 @@ class Conversation:
         """Trim history to fit token budget, keeping system prompt + most recent messages."""
         if not self.messages:
             return []
-        
+
         system_msgs = [m for m in self.messages if m.role == "system"]
         other_msgs = [m for m in self.messages if m.role != "system"]
-        
+
         result = []
         result.extend(system_msgs)
-        
+
         current_tokens = sum(len(str(m.content)) // 4 for m in system_msgs)
-        
-        recent = []
+
+        recent: list[Message] = []
         for msg in reversed(other_msgs):
             msg_tokens = len(str(msg.content)) // 4
             if current_tokens + msg_tokens <= max_tokens:
@@ -69,20 +71,21 @@ class Conversation:
                 current_tokens += msg_tokens
             else:
                 break
-                
+
         result.extend(recent)
         return result
 
+
 class ConversationManager:
     """Manages active conversation and history."""
-    
+
     def __init__(self, system_prompt: str | None = None):
         """Initialize the conversation manager."""
         self._conversations: dict[str, Conversation] = {}
         self._active_id: str | None = None
         self._system_prompt: str = system_prompt or DEFAULT_SYSTEM_PROMPT
         logger.debug("ConversationManager initialized")
-        
+
     def new_conversation(self) -> Conversation:
         """Create and activate a new conversation."""
         conv = Conversation()
@@ -104,7 +107,7 @@ class ConversationManager:
         conv = self.get_active()
         if not conv:
             conv = self.new_conversation()
-            
+
         msg = Message.user(text)
         conv.add_message(msg)
         logger.debug("Added user message", conv_id=conv.id, length=len(text))
@@ -115,7 +118,7 @@ class ConversationManager:
         conv = self.get_active()
         if not conv:
             conv = self.new_conversation()
-            
+
         msg = Message.assistant(text)
         conv.add_message(msg)
         logger.debug("Added assistant message", conv_id=conv.id, length=len(text))

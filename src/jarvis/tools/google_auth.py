@@ -62,11 +62,11 @@ class GoogleOAuth:
         # needless sign-in. New/refreshed grants are always saved in AppData.
         legacy_name = "gmail_token.json" if self.service_name == "gmail" else "token.json"
         return [
-            self.token_path, 
-            self.data_dir / legacy_name, 
+            self.token_path,
+            self.data_dir / legacy_name,
             PROJECT_ROOT / "config" / legacy_name,
             PROJECT_ROOT / legacy_name,
-            LEGACY_CONFIG_DIR / legacy_name
+            LEGACY_CONFIG_DIR / legacy_name,
         ]
 
     def _load_usable_token(self) -> Credentials | None:
@@ -101,9 +101,11 @@ class GoogleOAuth:
             f"JARVIS_GOOGLE_CREDENTIALS_PATH. Checked: {searched}."
         )
 
-    def credentials(self) -> Credentials:
+    def credentials(self, *, interactive: bool = True) -> Credentials | None:
         credentials = self._load_usable_token()
         if credentials is None:
+            if not interactive:
+                return None
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(
                     str(self._client_secrets_path()), self.scopes
@@ -128,10 +130,13 @@ class GoogleOAuth:
             ) from exc
         return credentials
 
-    def build_service(self) -> Resource:
+    def build_service(self, *, interactive: bool = True) -> Resource | None:
+        credentials = self.credentials(interactive=interactive)
+        if credentials is None:
+            return None
         return build(
             self.service_name,
             self.version,
-            credentials=self.credentials(),
+            credentials=credentials,
             cache_discovery=False,
         )

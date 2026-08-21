@@ -1,12 +1,13 @@
 """Tests for LLM provider base classes and data models."""
 
+from unittest.mock import AsyncMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from google.genai import types
 
 from jarvis.llm.base import (
     AuthenticationError,
     LLMError,
-    LLMProvider,
     LLMResponse,
     Message,
     ModelTier,
@@ -205,6 +206,43 @@ class TestGeminiProviderMessageConversion:
         assert contents[1].role == "model"
         assert contents[2].role == "user"
 
+    @pytest.mark.asyncio
+    async def test_generate_normalizes_missing_usage_and_disables_sdk_afc(self):
+        """Gemini may return nullable counts, and JARVIS owns tool execution."""
+        from jarvis.llm.gemini import GeminiProvider
+
+        response = types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(
+                    content=types.Content(role="model", parts=[types.Part.from_text(text="pong")]),
+                    finish_reason=types.FinishReason.STOP,
+                )
+            ],
+            usage_metadata=types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=None,
+                candidates_token_count=None,
+            ),
+        )
+        provider = GeminiProvider(api_key="test", model="gemini-3.7-flash")
+        provider._execute_with_retry = AsyncMock(return_value=response)
+
+        result = await provider.generate([Message.user("ping")])
+
+        assert result.content == "pong"
+        assert result.usage.total_tokens == 0
+        config = provider._execute_with_retry.await_args.kwargs["config"]
+        assert config.automatic_function_calling.disable is True
+
+    @pytest.mark.asyncio
+    async def test_health_check_uses_model_metadata_endpoint(self):
+        from jarvis.llm.gemini import GeminiProvider
+
+        provider = GeminiProvider(api_key="test", model="gemini-3.7-flash")
+        provider._execute_with_retry = AsyncMock(return_value=types.Model(name="test"))
+
+        assert await provider.health_check() is True
+        provider._execute_with_retry.assert_awaited_once_with("get", model="gemini-3.7-flash")
+
 
 class TestGroqProviderMessageConversion:
     """Test Groq provider's message conversion logic."""
@@ -221,9 +259,11 @@ class TestGroqProviderMessageConversion:
         ]
         formatted = provider._convert_messages(messages)
 
-        assert len(formatted) == 2
-        assert formatted[0] == {"role": "user", "content": "Hello"}
-        assert formatted[1] == {"role": "assistant", "content": "Hi there!"}
+        assert len(formatted) == 3
+        assert formatted[0]["role"] == "system"
+        assert "No callable tools" in formatted[0]["content"]
+        assert formatted[1] == {"role": "user", "content": "Hello"}
+        assert formatted[2] == {"role": "assistant", "content": "Hi there!"}
 
     def test_system_prompt_prepended(self):
         """System prompt should be prepended as a system message."""
@@ -234,9 +274,10 @@ class TestGroqProviderMessageConversion:
         messages = [Message.user("Hello")]
         formatted = provider._convert_messages(messages, system_prompt="Be helpful")
 
-        assert len(formatted) == 2
+        assert len(formatted) == 3
         assert formatted[0] == {"role": "system", "content": "Be helpful"}
-        assert formatted[1] == {"role": "user", "content": "Hello"}
+        assert formatted[1]["role"] == "system"
+        assert formatted[2] == {"role": "user", "content": "Hello"}
 
 
 @pytest.mark.integration
@@ -246,21 +287,25 @@ class TestRealAPIIntegration:
     async def test_gemini_health_check(self):
         """Test that Gemini health check works with a real key."""
         import os
+
         key = os.environ.get("GEMINI_API_KEY")
         if not key:
             pytest.skip("GEMINI_API_KEY not set")
 
         from jarvis.llm.gemini import GeminiProvider
+
         provider = GeminiProvider(api_key=key)
         assert await provider.health_check() is True
 
     async def test_groq_health_check(self):
         """Test that Groq health check works with a real key."""
         import os
+
         key = os.environ.get("GROQ_API_KEY")
         if not key:
             pytest.skip("GROQ_API_KEY not set")
 
         from jarvis.llm.groq_provider import GroqProvider
+
         provider = GroqProvider(api_key=key)
         assert await provider.health_check() is True

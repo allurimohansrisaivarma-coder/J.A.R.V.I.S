@@ -2,11 +2,13 @@
 
 import asyncio
 import time
+from collections.abc import Callable
+from contextlib import suppress
 from enum import Enum, auto
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from jarvis.core.session import SessionManager
 from jarvis.utils.metrics import metrics
 from jarvis.voice.capture import AudioCapture
 from jarvis.voice.stt import STTProvider
@@ -14,20 +16,26 @@ from jarvis.voice.tts import TTSProvider
 
 logger = structlog.get_logger(__name__)
 
+if TYPE_CHECKING:
+    from jarvis.core.session import SessionManager
+
+
 class VoiceState(Enum):
     """States of the voice conversation."""
+
     IDLE = auto()
     LISTENING = auto()
     RECORDING = auto()
     THINKING = auto()
     SPEAKING = auto()
 
+
 class VoiceManager:
     """Manages the full voice interaction loop with streaming support."""
-    
-    def __init__(self, session: SessionManager, stt: STTProvider, tts: TTSProvider):
+
+    def __init__(self, session: "SessionManager", stt: STTProvider, tts: TTSProvider):
         """Initialize the voice manager.
-        
+
         Args:
             session: Active LLM session manager.
             stt: Speech-to-Text provider.
@@ -36,22 +44,22 @@ class VoiceManager:
         self.session = session
         self.stt = stt
         self.tts = tts
-        self.capture = AudioCapture()
+        self.capture: AudioCapture | None = None
         self.state = VoiceState.IDLE
         self._is_running = False
         self._task: asyncio.Task | None = None
         self._active_speak_task: asyncio.Task | None = None
         self._response_lock = asyncio.Lock()
-        
+
         # Push-to-talk queue (filled by hotkey listener)
         self.hotkey_queue: asyncio.Queue[str] = asyncio.Queue()
-        
+
         # Callbacks for UI updates
-        self.on_state_change = None
-        self.on_user_message = None
-        self.on_jarvis_chunk = None
-        self.on_jarvis_done = None
-        self.on_audio_level = None
+        self.on_state_change: Callable[[VoiceState], object] | None = None
+        self.on_user_message: Callable[[str], object] | None = None
+        self.on_jarvis_chunk: Callable[[Any], object] | None = None
+        self.on_jarvis_done: Callable[[], object] | None = None
+        self.on_audio_level: Callable[[float], object] | None = None
 
     def _set_state(self, new_state: VoiceState):
         """Update state and notify observers."""
@@ -91,7 +99,7 @@ class VoiceManager:
         if not getattr(self, "_ttfa_recorded", False) and hasattr(metrics, "_request_start_time"):
             metrics.record_ttfa(time.perf_counter() - metrics._request_start_time)
             self._ttfa_recorded = True
-            
+
         if self.on_jarvis_chunk:
             try:
                 self.on_jarvis_chunk(phrase)
@@ -114,8 +122,13 @@ class VoiceManager:
 
             async def text_stream():
                 async for chunk in self.session.process_input_stream(text):
-                    response_chunks.append(chunk)
-                    yield chunk
+                    if isinstance(chunk, dict):
+                        if self.on_jarvis_chunk:
+                            # Bypass TTS and send straight to UI
+                            self.on_jarvis_chunk(chunk)
+                    else:
+                        response_chunks.append(chunk)
+                        yield chunk
 
             try:
                 await self.tts.speak_stream(text_stream(), self._notify_jarvis_phrase)
@@ -124,6 +137,7 @@ class VoiceManager:
                 raise
             finally:
                 response = "".join(response_chunks)
+                self._set_state(VoiceState.IDLE)
                 if self.on_jarvis_done:
                     try:
                         self.on_jarvis_done()
@@ -131,7 +145,6 @@ class VoiceManager:
                         logger.error("Error in on_jarvis_done callback", error=str(e))
                 logger.info(
                     "Jarvis voice response completed",
-                    text=response[:200],
                     response_len=len(response),
                     latency=time.perf_counter() - started_at,
                 )
@@ -151,53 +164,86 @@ class VoiceManager:
         finally:
             self._starting_ptt = False
         logger.info("Starting push-to-talk loop")
-        
+
         try:
             while self._is_running:
                 # Wait for PTT_START event from hotkey listener
                 event = await self.hotkey_queue.get()
-                
+
                 if event == "PTT_START":
                     self._set_state(VoiceState.RECORDING)
                     logger.info("PTT recording started")
-                    
+
                     # Record until PTT_STOP
+                    if self.capture is None:
+                        self.capture = AudioCapture()
                     audio_path = await self.capture.record_until_released(
-                        self.hotkey_queue,
-                        on_audio_level=self.on_audio_level
+                        self.hotkey_queue, on_audio_level=self.on_audio_level
                     )
-                    
+
                     if not audio_path or not self._is_running:
                         self._set_state(VoiceState.IDLE)
                         continue
-                    
+
                     # STT
                     self._set_state(VoiceState.THINKING)
                     metrics.start_request("voice")
                     stt_start = time.perf_counter()
                     text = await self.stt.transcribe(audio_path)
                     metrics.record_stage("stt", time.perf_counter() - stt_start)
-                    
+
                     try:
                         audio_path.unlink()
-                    except Exception:
-                        pass
-                    
+                    except OSError as exc:
+                        logger.debug("Could not delete captured audio", error=str(exc))
+
                     if not text:
+                        metrics.end_request(status="empty_transcript")
                         self._set_state(VoiceState.IDLE)
                         continue
-                    
+
                     logger.info("User said (PTT)", text=text)
                     self._notify_user_message(text)
 
+                    # Cancel any existing speak task just in case
+                    if self._active_speak_task and not self._active_speak_task.done():
+                        self.tts.stop()
+                        self._active_speak_task.cancel()
+
                     self._active_speak_task = asyncio.create_task(self.respond_to_text(text))
-                    try:
-                        await self._active_speak_task
-                    except asyncio.CancelledError:
-                        logger.info("PTT response interrupted")
-                    
-                    self._set_state(VoiceState.IDLE)
-                    
+
+                    # Wait for either the speaking to finish, or the next hotkey event
+                    speak_task = self._active_speak_task
+                    hotkey_task = asyncio.create_task(self.hotkey_queue.get())
+
+                    done, _pending = await asyncio.wait(
+                        [speak_task, hotkey_task], return_when=asyncio.FIRST_COMPLETED
+                    )
+
+                    if hotkey_task in done:
+                        # User interrupted JARVIS!
+                        event = hotkey_task.result()
+                        if event == "PTT_START":
+                            logger.info("JARVIS interrupted by user!")
+                            self.tts.stop()
+                            if not speak_task.done():
+                                speak_task.cancel()
+
+                            # Put the event back so the next loop iteration catches it
+                            self.hotkey_queue.put_nowait("PTT_START")
+                    else:
+                        # JARVIS finished speaking normally
+                        hotkey_task.cancel()
+
+                    for pending_task in (speak_task, hotkey_task):
+                        if not pending_task.done():
+                            pending_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await pending_task
+
+                    if self.state == VoiceState.SPEAKING:
+                        self._set_state(VoiceState.IDLE)
+
         except asyncio.CancelledError:
             logger.info("PTT loop cancelled")
         except Exception as e:

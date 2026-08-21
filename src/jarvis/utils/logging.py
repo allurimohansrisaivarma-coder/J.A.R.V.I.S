@@ -22,7 +22,7 @@ def add_app_version(
 
 def setup_logging(settings: LoggingSettings) -> None:
     """Set up the structlog configuration and stdlib handlers.
-    
+
     Args:
         settings: Logging settings configuration instance.
     """
@@ -72,7 +72,7 @@ def setup_logging(settings: LoggingSettings) -> None:
         if settings.format != "json"
         else structlog.processors.JSONRenderer()
     )
-    
+
     console_formatter = structlog.stdlib.ProcessorFormatter(
         processors=[
             *shared_processors,
@@ -105,10 +105,10 @@ def setup_logging(settings: LoggingSettings) -> None:
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     """Get a bound structlog logger.
-    
+
     Args:
         name: Name of the logger, typically __name__.
-        
+
     Returns:
         A structlog bound logger instance.
     """

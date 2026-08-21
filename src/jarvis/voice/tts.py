@@ -1,5 +1,5 @@
 """Text-to-speech using Microsoft Edge TTS API with streaming playback."""
-# ruff: noqa: BLE001, S110
+# ruff: noqa: S110
 
 import asyncio
 import inspect
@@ -12,10 +12,13 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# pygame otherwise writes a promotional banner into the structured startup log.
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+
 # Short, complete phrases start playback sooner than waiting for a whole model
 # sentence.  This is deliberately conservative: too-small chunks sound choppy.
-_SENTENCE_ENDS = {'.', '!', '?', '\n'}
-_CLAUSE_ENDS = {',', ';', ':'}
+_SENTENCE_ENDS = {".", "!", "?", "\n"}
+_CLAUSE_ENDS = {",", ";", ":"}
 _MIN_PHRASE_CHARS = 28
 _FIRST_PHRASE_TARGET = 72
 _PHRASE_TARGET = 120
@@ -24,7 +27,7 @@ _MAX_PHRASE_OVERRUN = 20
 
 class TTSProvider:
     """Provides Text-to-Speech capabilities using Edge TTS with streaming support."""
-    
+
     def __init__(
         self,
         voice: str = "en-GB-RyanNeural",
@@ -32,7 +35,7 @@ class TTSProvider:
         pitch: str = "-5Hz",
     ):
         """Initialize the TTS provider.
-        
+
         Args:
             voice: The voice ID to use (e.g., 'en-GB-RyanNeural').
             rate: Speech rate adjustment (e.g., '+0%', '-10%', '+20%').
@@ -44,16 +47,17 @@ class TTSProvider:
         self._is_speaking = False
         self._stop_requested = False
         self._current_queue: asyncio.Queue[str | None] | None = None
-        
+
         # Try to initialize pygame mixer as primary playback
         self._use_pygame = False
         try:
             import pygame
+
             pygame.mixer.init()
             self._use_pygame = True
             logger.info("TTS initialized with pygame playback", voice=voice, rate=rate, pitch=pitch)
         except Exception as e:
-            logger.warning("pygame mixer unavailable, will use temp file fallback", error=str(e))
+            logger.warning("pygame mixer unavailable; audio playback disabled", error=str(e))
 
     def _clean_text(self, text: str) -> str:
         """Remove markdown artifacts that TTS would try to pronounce."""
@@ -61,33 +65,36 @@ class TTSProvider:
         clean = clean.replace("---", "").replace("___", "")
         # Remove markdown links: [text](url) -> text
         import re
-        clean = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', clean)
+
+        clean = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", clean)
         return clean.strip()
 
     async def speak(self, text: str) -> None:
         """Synthesize and play speech (blocking, full text at once).
-        
+
         This is the legacy method. Use speak_stream() for real-time streaming.
-        
+
         Args:
             text: The text to speak.
         """
         if not text.strip():
             return
-            
+
         clean_text = self._clean_text(text)
         if not clean_text:
             return
-        
+
         self._is_speaking = True
         self._stop_requested = False
 
         fd, temp_path = tempfile.mkstemp(suffix=".mp3")
         os.close(fd)
-        
+
         rate_str = str(self.rate).strip()
-        if not rate_str.endswith('%'): rate_str += '%'
-        if not rate_str.startswith('+') and not rate_str.startswith('-'): rate_str = f"+{rate_str}"
+        if not rate_str.endswith("%"):
+            rate_str += "%"
+        if not rate_str.startswith("+") and not rate_str.startswith("-"):
+            rate_str = f"+{rate_str}"
 
         try:
             logger.debug("Generating TTS audio", text_length=len(clean_text), voice=self.voice)
@@ -95,17 +102,18 @@ class TTSProvider:
                 clean_text, self.voice, rate=rate_str, pitch=self.pitch
             )
             await communicate.save(temp_path)
-            
+
             if self._stop_requested:
                 return
-            
+
             if self._use_pygame:
                 import pygame
+
                 pygame.mixer.music.load(temp_path)
                 pygame.mixer.music.play()
                 while pygame.mixer.music.get_busy() and not self._stop_requested:
                     await asyncio.sleep(0.1)
-            
+
         except Exception as e:
             logger.error("Error during TTS playback", error=str(e))
         finally:
@@ -113,8 +121,9 @@ class TTSProvider:
             if self._use_pygame:
                 try:
                     import pygame
+
                     pygame.mixer.music.unload()
-                except (AttributeError, Exception):
+                except Exception:
                     pass
             try:
                 if os.path.exists(temp_path):
@@ -167,22 +176,22 @@ class TTSProvider:
         on_phrase_ready: Callable[[str], object] | None = None,
     ) -> None:
         """Consume an async text stream, buffer sentences, and speak them as they arrive.
-        
+
         This method enables JARVIS to start speaking while the LLM is still generating.
-        
+
         Args:
             text_stream: An async iterator yielding text chunks from the LLM.
         """
         self._is_speaking = True
         self._stop_requested = False
-        
+
         # Pipeline queues
         text_queue: asyncio.Queue[str | None] = asyncio.Queue()
         audio_queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
-        
+
         # Keep track of generated temp paths so we can clean them up if stopped
-        self._current_queue = text_queue 
-        
+        self._current_queue = text_queue
+
         async def _buffer_text():
             """Accumulate LLM chunks into complete phrases and enqueue them."""
             buffer = ""
@@ -192,7 +201,7 @@ class TTSProvider:
                     if self._stop_requested:
                         break
                     buffer += chunk
-                    
+
                     while buffer:
                         phrase, buffer = self._take_phrase(
                             buffer,
@@ -217,7 +226,7 @@ class TTSProvider:
                 logger.error("Error buffering text", error=str(e))
             finally:
                 await text_queue.put(None)
-        
+
         async def _download_audio():
             """Pop phrases, download MP3s, and queue the file paths."""
             try:
@@ -225,28 +234,30 @@ class TTSProvider:
                     phrase = await text_queue.get()
                     if phrase is None:
                         break
-                        
+
                     clean = self._clean_text(phrase)
                     if not clean:
                         continue
-                        
+
                     fd, temp_path = tempfile.mkstemp(suffix=".mp3")
                     os.close(fd)
-                    
+
                     rate_str = str(self.rate).strip()
-                    if not rate_str.endswith('%'): rate_str += '%'
-                    if not rate_str.startswith('+') and not rate_str.startswith('-'): rate_str = f"+{rate_str}"
+                    if not rate_str.endswith("%"):
+                        rate_str += "%"
+                    if not rate_str.startswith("+") and not rate_str.startswith("-"):
+                        rate_str = f"+{rate_str}"
 
                     try:
                         communicate = edge_tts.Communicate(
                             clean, self.voice, rate=rate_str, pitch=self.pitch
                         )
                         await communicate.save(temp_path)
-                        
+
                         if self._stop_requested:
                             os.unlink(temp_path)
                             break
-                            
+
                         await audio_queue.put((temp_path, phrase))
                     except Exception as e:
                         logger.error("Error downloading phrase", error=str(e))
@@ -262,7 +273,7 @@ class TTSProvider:
                             pass
             finally:
                 await audio_queue.put(None)
-                
+
         async def _play_audio():
             """Pop MP3 paths and play them sequentially using pygame."""
             try:
@@ -271,9 +282,10 @@ class TTSProvider:
                     if audio_item is None:
                         break
                     temp_path, phrase = audio_item
-                        
+
                     if self._use_pygame:
                         import pygame
+
                         try:
                             pygame.mixer.music.load(temp_path)
                             if on_phrase_ready:
@@ -322,28 +334,29 @@ class TTSProvider:
             buffer_task = asyncio.create_task(_buffer_text())
             download_task = asyncio.create_task(_download_audio())
             play_task = asyncio.create_task(_play_audio())
-            
+
             await asyncio.gather(buffer_task, download_task, play_task)
-            
+
         except Exception as e:
             logger.error("Error in streaming TTS", error=str(e))
         finally:
             self._is_speaking = False
             self._current_queue = None
-    
+
     def stop(self) -> None:
         """Request immediate stop of any current speech."""
         self._stop_requested = True
-        
+
         if self._current_queue is not None:
             try:
                 self._current_queue.put_nowait(None)
             except Exception:
                 pass
-                
+
         if self._use_pygame:
             try:
                 import pygame
+
                 pygame.mixer.music.stop()
             except Exception:
                 pass

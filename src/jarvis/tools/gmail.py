@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from email.message import EmailMessage
 from email.utils import getaddresses
+from typing import Never
 
 from googleapiclient.errors import HttpError
 
@@ -58,7 +59,7 @@ class GoogleGmailTool:
         return self.service
 
     @staticmethod
-    def _raise(operation: str, error: HttpError) -> None:
+    def _raise(operation: str, error: HttpError) -> Never:
         detail = error.reason if getattr(error, "reason", None) else str(error)
         raise GmailOperationError(f"Gmail could not {operation}: {detail}") from error
 
@@ -73,18 +74,30 @@ class GoogleGmailTool:
 
     def get_emails(self, query: str = "is:unread", max_results: int = 5) -> str:
         try:
-            results = self._service().users().messages().list(
-                userId="me", q=query, maxResults=max(1, min(max_results, 20))
-            ).execute()
+            results = (
+                self._service()
+                .users()
+                .messages()
+                .list(userId="me", q=query, maxResults=max(1, min(max_results, 20)))
+                .execute()
+            )
             messages = results.get("messages", [])
             if not messages:
                 return f"No emails found matching query: {query}"
             summaries = []
             for message in messages:
-                item = self._service().users().messages().get(
-                    userId="me", id=message["id"], format="metadata",
-                    metadataHeaders=["From", "Subject", "Date"],
-                ).execute()
+                item = (
+                    self._service()
+                    .users()
+                    .messages()
+                    .get(
+                        userId="me",
+                        id=message["id"],
+                        format="metadata",
+                        metadataHeaders=["From", "Subject", "Date"],
+                    )
+                    .execute()
+                )
                 headers = _headers(item.get("payload", {}))
                 summaries.append(
                     f"From: {headers.get('from', 'Unknown Sender')}\n"
@@ -98,9 +111,13 @@ class GoogleGmailTool:
 
     def get_draft(self, draft_id: str) -> str:
         try:
-            draft = self._service().users().drafts().get(
-                userId="me", id=draft_id, format="full"
-            ).execute()
+            draft = (
+                self._service()
+                .users()
+                .drafts()
+                .get(userId="me", id=draft_id, format="full")
+                .execute()
+            )
             message = draft.get("message", {})
             payload = message.get("payload", {})
             headers = _headers(payload)
@@ -114,16 +131,25 @@ class GoogleGmailTool:
 
     def get_recent_drafts(self, max_results: int = 5) -> str:
         try:
-            drafts = self._service().users().drafts().list(
-                userId="me", maxResults=max(1, min(max_results, 20))
-            ).execute().get("drafts", [])
+            drafts = (
+                self._service()
+                .users()
+                .drafts()
+                .list(userId="me", maxResults=max(1, min(max_results, 20)))
+                .execute()
+                .get("drafts", [])
+            )
             if not drafts:
                 return "No existing drafts found."
             details = []
             for draft in drafts:
-                item = self._service().users().drafts().get(
-                    userId="me", id=draft["id"], format="metadata"
-                ).execute()
+                item = (
+                    self._service()
+                    .users()
+                    .drafts()
+                    .get(userId="me", id=draft["id"], format="metadata")
+                    .execute()
+                )
                 headers = _headers(item.get("message", {}).get("payload", {}))
                 details.append(
                     f"Draft ID: {draft['id']} | To: {headers.get('to', 'Unknown Recipient')} | "
@@ -142,11 +168,19 @@ class GoogleGmailTool:
 
     def create_draft(self, to: str, subject: str, body: str) -> str:
         if not body or len(body.strip()) < 2:
-            raise GmailOperationError("JARVIS requires the complete email body to draft the email. Do not leave the body empty.")
+            raise GmailOperationError(
+                "JARVIS requires the complete email body to draft the email. Do not leave the body empty."
+            )
         try:
-            draft = self._service().users().drafts().create(userId="me", body={
-                "message": {"raw": self._raw_message(to, subject, body)}
-            }).execute()
+            draft = (
+                self._service()
+                .users()
+                .drafts()
+                .create(
+                    userId="me", body={"message": {"raw": self._raw_message(to, subject, body)}}
+                )
+                .execute()
+            )
             return f"Draft created successfully.\n{self.get_draft(draft['id'])}"
         except HttpError as error:
             self._raise("create draft", error)
@@ -155,11 +189,21 @@ class GoogleGmailTool:
         if not draft_id.strip():
             raise GmailOperationError("JARVIS needs the draft ID before it can update a draft.")
         if not body or len(body.strip()) < 2:
-            raise GmailOperationError("JARVIS requires the complete email body to update the draft. Do not leave the body empty.")
+            raise GmailOperationError(
+                "JARVIS requires the complete email body to update the draft. Do not leave the body empty."
+            )
         try:
-            draft = self._service().users().drafts().update(userId="me", id=draft_id, body={
-                "message": {"raw": self._raw_message(to, subject, body)}
-            }).execute()
+            draft = (
+                self._service()
+                .users()
+                .drafts()
+                .update(
+                    userId="me",
+                    id=draft_id,
+                    body={"message": {"raw": self._raw_message(to, subject, body)}},
+                )
+                .execute()
+            )
             return f"Draft updated successfully.\n{self.get_draft(draft['id'])}"
         except HttpError as error:
             self._raise("update draft", error)
@@ -169,9 +213,9 @@ class GoogleGmailTool:
             raise GmailOperationError("JARVIS needs an explicit draft ID before sending an email.")
         try:
             self._service().users().drafts().get(userId="me", id=draft_id).execute()
-            message = self._service().users().drafts().send(
-                userId="me", body={"id": draft_id}
-            ).execute()
+            message = (
+                self._service().users().drafts().send(userId="me", body={"id": draft_id}).execute()
+            )
             return f"Email sent successfully. Message ID: {message['id']}"
         except HttpError as error:
             self._raise("send draft", error)

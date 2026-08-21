@@ -1,7 +1,6 @@
 """Pytest fixtures for the Jarvis test suite."""
 
 from pathlib import Path
-from typing import Generator
 
 import pytest
 
@@ -27,10 +26,7 @@ def temp_config_dir(tmp_path: Path) -> Path:
 @pytest.fixture
 def settings(mock_env: None) -> Settings:
     """Provide a test Settings instance with mock keys."""
-    return Settings(
-        gemini_api_key="test-gemini-key",
-        groq_api_key="test-groq-key"
-    )
+    return Settings(gemini_api_key="test-gemini-key", groq_api_key="test-groq-key")
 
 
 def pytest_configure(config: pytest.Config) -> None:

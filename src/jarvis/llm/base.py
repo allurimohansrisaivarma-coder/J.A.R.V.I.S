@@ -10,6 +10,7 @@ from typing import Any
 
 class ModelTier(Enum):
     """Tier of the model to be used."""
+
     FAST = "fast"
     STANDARD = "standard"
     COMPLEX = "complex"
@@ -18,8 +19,9 @@ class ModelTier(Enum):
 @dataclass
 class Message:
     """A single message in a conversation."""
+
     role: str
-    content: str | list
+    content: str | list[Any]
     name: str | None = None
 
     @classmethod
@@ -28,7 +30,7 @@ class Message:
         return cls(role="system", content=text)
 
     @classmethod
-    def user(cls, text: str | list) -> "Message":
+    def user(cls, text: str | list[Any]) -> "Message":
         """Create a user message."""
         return cls(role="user", content=text)
 
@@ -38,7 +40,7 @@ class Message:
         return cls(role="assistant", content=text)
 
     @classmethod
-    def tool(cls, content: str | list, name: str) -> "Message":
+    def tool(cls, content: str | list[Any], name: str) -> "Message":
         """Create a tool response message."""
         return cls(role="tool", content=content, name=name)
 
@@ -46,6 +48,7 @@ class Message:
 @dataclass
 class TokenUsage:
     """Token usage for an LLM request."""
+
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
@@ -58,13 +61,14 @@ class TokenUsage:
 @dataclass
 class LLMResponse:
     """Standardized response from an LLM provider."""
+
     content: str
     model: str
     provider: str
     usage: TokenUsage
     latency_ms: float
     finish_reason: str = "stop"
-    raw: dict | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
     tool_calls: list[Any] = field(default_factory=list)
 
 
@@ -130,7 +134,7 @@ class LLMProvider(ABC):
         """Generate a response from the LLM."""
 
     @abstractmethod
-    async def stream(
+    def stream(
         self,
         messages: list[Message],
         *,

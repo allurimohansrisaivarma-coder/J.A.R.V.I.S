@@ -1,6 +1,6 @@
 # J.A.R.V.I.S. — Desktop Intelligence Platform
 
-A Windows 10/11 desktop AI assistant with voice conversations, screen understanding, guarded local-file intelligence, local application launching, optional long-term memory, and an Iron Man-inspired HUD. Version **0.2.7** uses Groq for ordinary work and reserves Gemini for complex reasoning and vision so free-tier usage remains practical. Cloud availability and quotas still depend on your provider accounts.
+A Windows 10/11 desktop AI assistant with voice conversations, screen understanding, guarded local-file intelligence, local application launching, optional long-term memory, and an Iron Man-inspired HUD. Version **0.2.8** uses Groq for ordinary work and reserves Gemini for complex reasoning and vision so free-tier usage remains practical. Cloud availability and quotas still depend on your provider accounts.
 
 ---
 
@@ -63,7 +63,7 @@ PowerShell activation, if desired, is `..\.venv\Scripts\Activate.ps1` only when 
 
 JARVIS is distributed as a **one-folder application** because its AI, audio, screen-capture, and tool dependencies must remain beside the executable.
 
-1. Download `JARVIS-Windows-x64-v0.2.7.zip` from the GitHub Release.
+1. Download `JARVIS-Windows-x64-v0.2.8.zip` from the GitHub Release.
 2. Extract the entire `JARVIS` folder. Do not copy `JARVIS.exe` out by itself.
 3. Double-click `JARVIS.exe`. Open Settings and save your Groq and/or Gemini keys, then reopen the app. Keys entered here are encrypted for your Windows account. Existing `.env` configurations still work.
 4. Use SCREEN to read the visible desktop, hold the mic button to speak, and use STOP or Escape to interrupt a reply.
@@ -324,12 +324,12 @@ system:
 .\.venv\Scripts\python.exe build.py
 ```
 
-Use `build.py --package-only` to refresh the release ZIP and checksums from an already-built versioned `dist\JARVIS-0.2.7` folder. Both modes exclude `.env`, OAuth tokens, runtime logs/data, and personal `config\jarvis.yaml` from the archive.
+Use `build.py --package-only` to refresh the release ZIP and checksums from an already-built versioned `dist\JARVIS-0.2.8` folder. Both modes exclude `.env`, OAuth tokens, runtime logs/data, and personal `config\jarvis.yaml` from the archive.
 
 The release build produces:
 
-- `dist\JARVIS-0.2.7\JARVIS.exe` — the updated executable inside its required application folder
-- `dist\JARVIS-Windows-x64-v0.2.7.zip` — upload this to a GitHub Release
+- `dist\JARVIS-0.2.8\JARVIS.exe` — the updated executable inside its required application folder
+- `dist\JARVIS-Windows-x64-v0.2.8.zip` — upload this to a GitHub Release
 - `dist\SHA256SUMS.txt` — integrity hashes for the executable and ZIP
 
 `dist/`, user configuration, logs, tokens, and `.env` are intentionally ignored by Git. Push the source repository normally, then attach the generated ZIP and checksum file to the corresponding GitHub Release rather than committing the large binary bundle.
@@ -379,7 +379,7 @@ This project is open-source and available under the [MIT License](LICENSE).
 
 ## Reliability update 0.2.1
 
-The executable is in `dist/JARVIS-0.2.7/JARVIS.exe`; keep its `_internal` folder beside it. The release ZIP includes the full application. Builds now use a versioned output folder so rebuilding does not erase an older installation's configuration or logs.
+The executable is in `dist/JARVIS-0.2.8/JARVIS.exe`; keep its `_internal` folder beside it. The release ZIP includes the full application. Builds now use a versioned output folder so rebuilding does not erase an older installation's configuration or logs.
 
 - Screenshots are kept out of conversation history and sent only to models that accept images. Displays are captured separately to preserve readable text. The HUD is excluded from capture when Windows supports it. Capture requires an unlocked, interactive Windows desktop; protected content may remain unavailable.
 - Screen requests use `qwen/qwen3.6-27b` on Groq first and Gemini as fallback. This is configurable with `llm.groq.vision_model`. Both require internet and an accepted provider key.
@@ -391,7 +391,7 @@ The executable is in `dist/JARVIS-0.2.7/JARVIS.exe`; keep its `_internal` folder
 
 Verified provider request formats: [Groq vision documentation](https://console.groq.com/docs/vision) and [Gemini 3.7 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash).
 
-## Arc reactor HUD 0.2.7
+## Arc reactor HUD 0.2.8
 
 The refreshed HUD uses local SVG artwork and state-driven animations. Compact mode pauses dashboard polling and keeps only the circular reactor visible. Reduced-motion preferences are respected.
 
@@ -405,7 +405,7 @@ The refreshed HUD uses local SVG artwork and state-driven animations. Compact mo
 
 If another app already owns a desktop shortcut, the HUD reports it; its buttons remain available. Screen reading requires an unlocked desktop and a configured AI provider.
 
-## Conversation and reliability update 0.2.7
+## Conversation and reliability update 0.2.8
 
 Conversation history is saved in a local SQLite archive and restored on restart, independently of optional pinned facts. Relevant earlier user statements are retrieved across conversations; newer corrections take priority. Explicit requests to remember facts are also retrieved when a later message does not share the same keywords. Generated assistant claims are not indexed as user facts. Settings includes a clear-history control.
 

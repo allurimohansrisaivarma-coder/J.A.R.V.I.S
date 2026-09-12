@@ -1,3 +1,9 @@
+# 0.2.8
+
+- Keep topic follow-ups such as "you missed AI" on the deterministic publisher-feed path.
+- Omit empty news categories instead of padding the debrief with unavailable-topic messages.
+- Prevent old weather, campus, file, and other conversation context from appearing in news output.
+
 # 0.2.7
 
 - Prevent Markdown bullets from being sent to speech as empty audio requests.

@@ -42,5 +42,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name='JARVIS-0.2.7',
+    name='JARVIS-0.2.8',
 )

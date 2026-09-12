@@ -80,6 +80,8 @@ def test_google_news_fallback_keeps_dated_headline_and_named_publisher():
         "give me the daily de brief",
         "Give me a daily de-brief",
         "i didnt get the ai news",
+        "you missed AI",
+        "repeat Formula One",
         "Read the AI headlines again",
         "Daily briefing",
         "Morning news brief",
@@ -105,7 +107,7 @@ def test_explicit_topic_request_does_not_mix_unrelated_news():
 
 
 @pytest.mark.asyncio
-async def test_digest_uses_only_feed_titles_with_dates_and_does_not_pad_missing_results(
+async def test_digest_uses_only_feed_titles_with_dates_and_omits_empty_categories(
     monkeypatch,
 ):
     async def fetch(client, topic, now):
@@ -125,7 +127,10 @@ async def test_digest_uses_only_feed_titles_with_dates_and_does_not_pad_missing_
     answer = await build_daily_briefing("Daily debrief", now=NOW)
     assert "[A real publisher headline](https://www.bbc.co.uk/sport/article)" in answer
     assert "12 Sep 02:00 UTC" in answer
-    assert answer.count("No fresh, dated headlines") == 4
+    assert "**Formula One**" in answer
+    assert "**Cricket**" not in answer
+    assert "**AI**" not in answer
+    assert "No fresh, dated" not in answer
     assert "Hamilton" not in answer and "Ashes" not in answer
 
 
@@ -136,7 +141,35 @@ async def test_feed_failure_and_old_results_do_not_become_news(monkeypatch):
 
     monkeypatch.setattr("jarvis.context.briefing.fetch_headlines", fetch)
     answer = await build_daily_briefing("Daily debrief", now=NOW)
-    assert answer.count("No fresh, dated headlines") == 5
+    assert answer.count("No fresh, dated publisher headlines") == 1
+    assert not any(f"**{topic.name}**" in answer for topic in TOPICS)
+
+
+@pytest.mark.asyncio
+async def test_topic_followup_contains_only_requested_feed_and_no_old_context(monkeypatch):
+    async def fetch(client, topic, now):
+        assert topic.name == "AI"
+        return [
+            {
+                "title": "Verified AI publisher headline",
+                "url": "https://techcrunch.com/verified-ai-headline",
+                "published": NOW,
+                "publisher": "TechCrunch",
+            }
+        ]
+
+    monkeypatch.setattr("jarvis.context.briefing.fetch_headlines", fetch)
+    answer = await build_daily_briefing("you missed AI", now=NOW)
+
+    assert "Verified AI publisher headline" in answer
+    assert "**AI**" in answer
+    assert "**Cricket**" not in answer
+    assert "**Formula One**" not in answer
+    assert "**Software engineering**" not in answer
+    assert "**World news**" not in answer
+    assert "Sunset" not in answer
+    assert "BITS" not in answer
+    assert "mohan cv" not in answer
 
 
 @pytest.mark.asyncio

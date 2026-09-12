@@ -36,7 +36,7 @@ def public_url(url: str) -> bool:
 def read_public_page(url: str) -> str:
     try:
         with httpx.Client(
-            timeout=3.0, headers={"User-Agent": "JARVIS/0.2.7 (page reader)"}
+            timeout=3.0, headers={"User-Agent": "JARVIS/0.2.8 (page reader)"}
         ) as client:
             for _ in range(3):
                 if not public_url(url):

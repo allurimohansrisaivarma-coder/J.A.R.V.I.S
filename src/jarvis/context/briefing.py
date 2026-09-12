@@ -69,9 +69,19 @@ TOPICS = (
 def is_news_briefing(query: str) -> bool:
     # Speech recognition commonly separates or hyphenates "debrief".
     normalized = re.sub(r"\bde[\s-]+brief\b", "debrief", query, flags=re.IGNORECASE)
+    has_known_topic = any(
+        re.search(topic.keywords, normalized, re.IGNORECASE) for topic in TOPICS
+    )
     known_topic_news = bool(
-        re.search(r"\b(?:news|headlines?|updates?)\b", normalized, re.IGNORECASE)
-        and any(re.search(topic.keywords, normalized, re.IGNORECASE) for topic in TOPICS)
+        has_known_topic
+        and (
+            re.search(r"\b(?:news|headlines?|updates?)\b", normalized, re.IGNORECASE)
+            or re.search(
+                r"\b(?:missed?|skip(?:ped)?|forgot|repeat|again|didn['’]?t get|did not get)\b",
+                normalized,
+                re.IGNORECASE,
+            )
+        )
     )
     if not known_topic_news and not re.search(
         r"\b(?:(?:(?:daily|morning|evening)(?:\s+news)?|news|sports)\s+(?:debrief|briefing|brief|digest|roundup)|(?:debrief|briefing|roundup)\s+(?:of\s+)?(?:the\s+)?news)\b",
@@ -214,13 +224,13 @@ async def build_daily_briefing(query: str, *, now: datetime | None = None) -> st
         f"**Daily Debrief — {local:%d %b %Y}**",
         f"Publisher headlines from the past 24 hours. Checked {now:%H:%M UTC}. Each date below is the publication time.",
     ]
+    headline_count = 0
     for topic, result in zip(topics, results):
-        output.append(f"**{topic.name}**")
+        # Empty categories add noise and invite a model to fill gaps from old
+        # conversation context. Render only fresh publisher items.
         if isinstance(result, BaseException) or not result:
-            output.append(
-                "No fresh, dated headlines could be retrieved from this feed. I won't fill the gap with older news."
-            )
             continue
+        output.append(f"**{topic.name}**")
         for row in result[:per_topic]:
             # Literal publisher titles only: no model-generated scores, standings,
             # schedules or invented summaries; strip Markdown control characters.
@@ -228,4 +238,7 @@ async def build_daily_briefing(query: str, *, now: datetime | None = None) -> st
             output.append(
                 f"- [{title}]({row['url']}) — {row.get('publisher', topic.publisher)}, {row['published'].astimezone(UTC):%d %b %H:%M UTC}."
             )
+            headline_count += 1
+    if not headline_count:
+        output.append("No fresh, dated publisher headlines were available in the past 24 hours.")
     return "\n\n".join(output)

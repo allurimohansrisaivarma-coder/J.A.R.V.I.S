@@ -1,4 +1,4 @@
-JARVIS 0.2.7 - Windows
+JARVIS 0.2.8 - Windows
 
 1. Extract the whole ZIP, then open JARVIS.exe in the extracted folder.
    Keep the _internal folder beside the executable.

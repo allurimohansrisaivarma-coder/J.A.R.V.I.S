@@ -16,12 +16,12 @@ VSVersionInfo(
         [
           StringStruct(u'CompanyName', u'JARVIS Desktop Intelligence Platform'),
           StringStruct(u'FileDescription', u'JARVIS Windows Desktop Assistant'),
-          StringStruct(u'FileVersion', u'0.2.7'),
+          StringStruct(u'FileVersion', u'0.2.8'),
           StringStruct(u'InternalName', u'JARVIS'),
           StringStruct(u'LegalCopyright', u'Copyright (c) 2026 JARVIS contributors'),
           StringStruct(u'OriginalFilename', u'JARVIS.exe'),
           StringStruct(u'ProductName', u'JARVIS'),
-          StringStruct(u'ProductVersion', u'0.2.7')
+          StringStruct(u'ProductVersion', u'0.2.8')
         ]
       )
     ]),

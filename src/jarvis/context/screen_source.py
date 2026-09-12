@@ -74,7 +74,8 @@ class ScreenContextSource(ContextSource):
 
         try:
             # Capture APIs are synchronous and can stall the chat event loop.
-            img = await asyncio.to_thread(self._capture_screen)
+            images = await asyncio.to_thread(self._capture_screens)
+            img = images[0]
 
             if img.mode != "RGB":
                 img = img.convert("RGB")
@@ -106,11 +107,40 @@ class ScreenContextSource(ContextSource):
 
             context_str = f"Screenshot captured for the user's screen question: {query}\n"
 
-            return (context_str, [img])
+            context_str += (
+                f"{len(images)} display(s) captured just now. Read visible text carefully; "
+                "if text is too small or obscured, say so. Never infer unseen content.\n"
+            )
+            return (context_str, images)
 
         except Exception as e:
             logger.error("Screen capture failed", error=str(e))
-            return "Screen capture failed. I cannot see the screen right now."
+            return (
+                "Screen capture failed. I cannot see the screen right now. "
+                "Unlock the Windows desktop and keep the target window visible, then retry. "
+                "Never guess what is on the screen."
+            )
+
+    @staticmethod
+    def _capture_screens():
+        """Keep displays separate so small text survives image resizing."""
+        try:
+            import mss
+
+            images = []
+            with mss.mss() as capture:
+                for monitor in capture.monitors[1:4]:
+                    shot = capture.grab(monitor)
+                    img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+                    img.thumbnail((1920, 1200), Image.Resampling.LANCZOS)
+                    images.append(img)
+            if images:
+                return images
+        except Exception as exc:
+            logger.debug("Per-display capture failed", error=str(exc))
+        img = ScreenContextSource._capture_screen().convert("RGB")
+        img.thumbnail((1920, 1200), Image.Resampling.LANCZOS)
+        return [img]
 
     @staticmethod
     def _capture_screen():

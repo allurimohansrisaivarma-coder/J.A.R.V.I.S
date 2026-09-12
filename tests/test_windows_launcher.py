@@ -23,6 +23,10 @@ def test_voice_launch_phrases_are_parsed_without_an_llm():
         assert request.app_name == app_name
 
 
+def test_dashboard_is_not_treated_as_an_installed_application():
+    assert windows_launcher.parse_launch_request("Open the global dashboard") is None
+
+
 def test_browser_resolution_checks_standard_install_directories(tmp_path, monkeypatch):
     chrome = tmp_path / "Google" / "Chrome" / "Application" / "chrome.exe"
     chrome.parent.mkdir(parents=True)

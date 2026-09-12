@@ -1,9 +1,12 @@
 import asyncio
 import html
 import json
+import re
+import secrets
 import time
 from contextlib import suppress
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import psutil
@@ -11,6 +14,7 @@ import structlog
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+from jarvis.utils.errors import user_error
 from jarvis.utils.metrics import metrics
 
 logger = structlog.get_logger(__name__)
@@ -21,6 +25,7 @@ class WebSocketServer:
         self.session_manager = session_manager
         self.host = host
         self.port = port
+        self.auth_token = secrets.token_urlsafe(32)
         self.clients: set[Any] = set()
         self._server = None
         self.voice_manager = voice_manager
@@ -77,12 +82,29 @@ class WebSocketServer:
             self.voice_manager.on_jarvis_done = lambda: asyncio.run_coroutine_threadsafe(
                 self.broadcast(json.dumps({"type": "done"})), loop
             )
+            self.voice_manager.on_error = lambda message: asyncio.run_coroutine_threadsafe(
+                self.broadcast(json.dumps({"type": "error", "message": message})), loop
+            )
+            self.voice_manager.tts.on_unavailable = lambda message: (
+                asyncio.run_coroutine_threadsafe(
+                    self.broadcast(json.dumps({"type": "notice", "message": message})), loop
+                )
+            )
 
         self.session_manager.on_metadata = lambda meta: asyncio.run_coroutine_threadsafe(
             self.broadcast(json.dumps({"type": "message_meta", "meta": meta})), self._loop
         )
 
-        self._server = await websockets.serve(self.handle_client, self.host, self.port)
+        try:
+            self._server = await websockets.serve(
+                self.handle_client, self.host, self.port, max_size=65536
+            )
+        except OSError as exc:
+            if exc.errno not in (10048, 98) and getattr(exc, "winerror", None) != 10048:
+                raise
+            logger.warning("Configured port occupied; selecting an available port")
+            self._server = await websockets.serve(self.handle_client, self.host, 0, max_size=65536)
+        self.port = self._server.sockets[0].getsockname()[1]
         self._world_task = asyncio.create_task(self._update_world_data_loop())
 
     async def stop(self):
@@ -296,13 +318,28 @@ class WebSocketServer:
             await asyncio.sleep(900)  # update every 15 mins
 
     async def handle_client(self, websocket):
+        token = parse_qs(urlparse(websocket.request.path).query).get("token", [""])[0]
+        if not secrets.compare_digest(token, self.auth_token):
+            await websocket.close(code=1008, reason="Unauthorized")
+            return
         self.clients.add(websocket)
         logger.info("Client connected", clients=len(self.clients))
 
         try:
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "capabilities",
+                        "chat": bool(self.session_manager.router.providers),
+                        "voice": self.voice_manager is not None,
+                    }
+                )
+            )
             async for message in websocket:
                 try:
                     data = json.loads(message)
+                    if not isinstance(data, dict):
+                        raise TypeError("Request must be an object")
                     msg_type = data.get("type")
 
                     if msg_type == "chat":
@@ -328,10 +365,67 @@ class WebSocketServer:
                                 await asyncio.sleep(0.05)
                             # Signal recording to begin
                             await self.voice_manager.hotkey_queue.put("PTT_START")
+                        else:
+                            await websocket.send(
+                                json.dumps(
+                                    {
+                                        "type": "error",
+                                        "message": "Voice input needs a Groq key and an available microphone. Open Settings to configure it.",
+                                    }
+                                )
+                            )
+                            await self.broadcast_state("IDLE")
                     elif msg_type == "voice_stop":
                         logger.info("Voice stop requested (PTT)")
                         if self.voice_manager:
                             await self.voice_manager.hotkey_queue.put("PTT_STOP")
+                    elif msg_type == "cancel":
+                        for task in list(self._chat_tasks):
+                            task.cancel()
+                        if self.voice_manager:
+                            await self.voice_manager.cancel_turn()
+                        await self.broadcast(json.dumps({"type": "done"}))
+                        await self.broadcast_state("IDLE")
+                    elif msg_type == "get_history":
+                        conversation = getattr(self.session_manager, "conversation", None)
+                        active = conversation.get_active() if conversation else None
+                        history = (
+                            [
+                                {"role": m.role, "text": m.content}
+                                for m in active.messages[-40:]
+                                if m.role in {"user", "assistant"} and isinstance(m.content, str)
+                            ]
+                            if active
+                            else []
+                        )
+                        await websocket.send(
+                            json.dumps({"type": "history_data", "messages": history})
+                        )
+                    elif msg_type == "clear_history":
+                        if self._chat_lock.locked() or (
+                            self.voice_manager
+                            and (
+                                self.voice_manager.tts.is_speaking
+                                or self.voice_manager.state.name != "IDLE"
+                            )
+                        ):
+                            await websocket.send(
+                                json.dumps(
+                                    {
+                                        "type": "error",
+                                        "message": "Stop the active reply before clearing conversation history.",
+                                    }
+                                )
+                            )
+                            continue
+                        conversation = getattr(self.session_manager, "conversation", None)
+                        if conversation:
+                            conversation.clear_history()
+                            for filename in ("transcript.txt", "transcript.jsonl"):
+                                (
+                                    self.session_manager.settings.logging.file.parent / filename
+                                ).unlink(missing_ok=True)
+                        await websocket.send(json.dumps({"type": "history_cleared"}))
                     elif msg_type == "get_settings":
                         cfg = self.session_manager.settings.voice
                         await websocket.send(
@@ -353,6 +447,9 @@ class WebSocketServer:
                     elif msg_type == "update_settings":
                         cfg = self.session_manager.settings.voice
                         new_settings = data.get("settings", {})
+                        rate_input = str(new_settings.get("tts_rate", cfg.tts_rate)).strip()
+                        if not re.fullmatch(r"[+-]?\d{1,3}%?", rate_input):
+                            raise ValueError("Use a speech rate such as +20%")
 
                         cfg.push_to_talk_key = str(
                             new_settings.get("push_to_talk_key", cfg.push_to_talk_key)
@@ -381,7 +478,10 @@ class WebSocketServer:
                             self.voice_manager.tts.rate = cfg.tts_rate
 
                         self.session_manager.settings.save_to_yaml(self.session_manager.config_path)
-                        await self._refresh_world_data(force=True)
+                        task = asyncio.create_task(self._refresh_world_data(force=True))
+                        self._chat_tasks.add(task)
+                        task.add_done_callback(self._chat_tasks.discard)
+                        await websocket.send(json.dumps({"type": "settings_saved"}))
 
                         hotkey_listener = self.hotkey_listener
                         server_loop = self.server_loop
@@ -414,7 +514,9 @@ class WebSocketServer:
                         )
                     elif msg_type == "get_world_monitor":
                         if data.get("refresh"):
-                            await self._refresh_world_data(force=True)
+                            task = asyncio.create_task(self._refresh_world_data(force=True))
+                            self._chat_tasks.add(task)
+                            task.add_done_callback(self._chat_tasks.discard)
                         ram = psutil.virtual_memory().percent
                         cpu = psutil.cpu_percent()
 
@@ -433,6 +535,12 @@ class WebSocketServer:
                             )
                         )
                     elif msg_type == "get_memories":
+                        if not self.session_manager.memory:
+                            await websocket.send(
+                                json.dumps(
+                                    {"type": "memories_data", "memories": [], "disabled": True}
+                                )
+                            )
                         if self.session_manager.memory:
                             time_filter = data.get("filter", "all")
                             from jarvis.memory.database import get_sqlite_session
@@ -491,6 +599,15 @@ class WebSocketServer:
                                 except Exception as e:
                                     logger.error("Failed to delete memory", error=str(e))
                     elif msg_type == "add_memory":
+                        if not self.session_manager.memory:
+                            await websocket.send(
+                                json.dumps(
+                                    {
+                                        "type": "error",
+                                        "message": "Long-term memory is disabled in configuration.",
+                                    }
+                                )
+                            )
                         if self.session_manager.memory:
                             fact = data.get("fact")
                             if fact:
@@ -515,9 +632,21 @@ class WebSocketServer:
             logger.info("Client disconnected")
         finally:
             self.clients.discard(websocket)
+            if not self.clients and self.voice_manager:
+                await self.voice_manager.hotkey_queue.put("PTT_STOP")
 
     async def process_chat(self, websocket, text: str):
         """Handle one turn at a time so chat and audio cannot interleave."""
+        if self._chat_lock.locked():
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "message": "A reply is in progress. Press Stop before sending another request.",
+                    }
+                )
+            )
+            return
         async with self._chat_lock:
             try:
                 if self.voice_manager:
@@ -532,7 +661,8 @@ class WebSocketServer:
                         elif isinstance(chunk, dict) and "__ui_action__" in chunk:
                             await websocket.send(json.dumps({"type": chunk["__ui_action__"]}))
                         else:
-                            await websocket.send(json.dumps({"type": "chunk", "text": chunk}))
+                            if isinstance(chunk, str):
+                                await websocket.send(json.dumps({"type": "chunk", "text": chunk}))
                     await websocket.send(json.dumps({"type": "done"}))
             except asyncio.CancelledError:
                 logger.info("Chat response interrupted")
@@ -542,9 +672,7 @@ class WebSocketServer:
             except Exception as e:
                 logger.error("Error processing chat", error=str(e))
                 with suppress(ConnectionClosed):
-                    await websocket.send(
-                        json.dumps({"type": "error", "message": "Could not process request"})
-                    )
+                    await websocket.send(json.dumps({"type": "error", "message": user_error(e)}))
                     await websocket.send(json.dumps({"type": "done"}))
                 await self.broadcast_state("ERROR")
             finally:

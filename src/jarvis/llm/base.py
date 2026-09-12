@@ -108,8 +108,24 @@ class _TimingContext:
         return (self.end_time - self.start_time) * 1000
 
 
+def has_images(messages: list[Message]) -> bool:
+    """Distinguish images from text lists and native function-call parts."""
+    from PIL import Image
+
+    return any(
+        isinstance(item, Image.Image)
+        for message in messages
+        if isinstance(message.content, list)
+        for item in message.content
+    )
+
+
 class LLMProvider(ABC):
     """Abstract base class for LLM providers."""
+
+    @property
+    def supports_images(self) -> bool:
+        return False
 
     @property
     @abstractmethod

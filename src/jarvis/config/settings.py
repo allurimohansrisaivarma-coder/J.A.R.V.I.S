@@ -1,5 +1,6 @@
 """Application settings and configuration management."""
 
+import os
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -18,6 +19,12 @@ else:
     APP_DIR = BUNDLE_DIR
     PROJECT_ROOT = BUNDLE_DIR
 
+USER_DIR = (
+    Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "JARVIS"
+    if getattr(sys, "frozen", False)
+    else PROJECT_ROOT
+)
+
 
 class GeminiSettings(BaseModel):
     """Settings for Google Gemini models."""
@@ -34,6 +41,7 @@ class GroqSettings(BaseModel):
     """Settings for Groq inference."""
 
     model: str = "openai/gpt-oss-20b"
+    vision_model: str = "qwen/qwen3.6-27b"
     temperature: float = 0.3
     max_output_tokens: int = 1024
 
@@ -176,13 +184,13 @@ class Settings(BaseSettings):
             if v == "fallback":
                 return []
             if not v.strip():
-                raise ValueError("GEMINI_API_KEYS must not be empty.")
+                return []
             keys = [k.strip() for k in v.split(",") if k.strip()]
         else:
             keys = [k.strip() for k in v if k.strip()]
 
         if not keys:
-            raise ValueError("At least one GEMINI_API_KEYS must be provided.")
+            return []
         if len(keys) > 5:
             raise ValueError("Maximum of 5 Gemini API keys allowed.")
         return keys
@@ -194,13 +202,13 @@ class Settings(BaseSettings):
             if v == "fallback":
                 return []
             if not v.strip():
-                raise ValueError("GROQ_API_KEYS must not be empty.")
+                return []
             keys = [k.strip() for k in v.split(",") if k.strip()]
         else:
             keys = [k.strip() for k in v if k.strip()]
 
         if not keys:
-            raise ValueError("At least one GROQ_API_KEYS must be provided.")
+            return []
         if len(keys) > 5:
             raise ValueError("Maximum of 5 Groq API keys allowed.")
         return keys
@@ -226,7 +234,7 @@ class Settings(BaseSettings):
     def save_to_yaml(self, path: Path | None = None) -> None:
         """Save current settings to a YAML file."""
         if path is None:
-            path = PROJECT_ROOT / "config" / "jarvis.yaml"
+            path = USER_DIR / "config" / "jarvis.yaml"
 
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -297,11 +305,27 @@ def get_settings() -> Settings:
         if getattr(sys, "frozen", False)
         else BUNDLE_DIR / "src" / "jarvis" / "config" / "defaults.yaml"
     )
-    user_config_path = PROJECT_ROOT / "config" / "jarvis.yaml"
+    user_config_path = USER_DIR / "config" / "jarvis.yaml"
 
     config_data = _load_yaml(defaults_path)
+    legacy_config = APP_DIR / "config" / "jarvis.yaml"
+    if legacy_config != user_config_path and legacy_config.exists():
+        config_data = _merge_dicts(config_data, _load_yaml(legacy_config))
     if user_config_path.exists():
         config_data = _merge_dicts(config_data, _load_yaml(user_config_path))
     env_file = _find_env_file()
 
-    return Settings.from_mapping(config_data, env_file=env_file)
+    from jarvis.config.credentials import load_keys
+
+    saved_keys = load_keys()
+    config_data.update(saved_keys)
+    settings = Settings.from_mapping(config_data, env_file=env_file)
+    for name, keys in saved_keys.items():
+        if name in ("groq_api_keys", "gemini_api_keys"):
+            setattr(settings, name, keys)
+    # Relative paths must not follow the shortcut's working directory.
+    if not settings.logging.file.is_absolute():
+        settings.logging.file = USER_DIR / settings.logging.file
+    if not settings.memory.data_dir.is_absolute():
+        settings.memory.data_dir = USER_DIR / settings.memory.data_dir
+    return settings

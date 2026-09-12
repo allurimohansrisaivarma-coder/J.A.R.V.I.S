@@ -6,6 +6,19 @@ import jarvis.context.file_source as file_source_module
 from jarvis.context.file_source import FileContextSource
 
 
+class _PdfPage:
+    def extract_text(self):
+        return "Mohan CV\nEducation: Computer Science\nExperience: Example project"
+
+
+class _PdfReader:
+    is_encrypted = False
+
+    def __init__(self, path, strict=False):
+        self.path = path
+        self.pages = [_PdfPage()]
+
+
 @pytest.mark.asyncio
 async def test_cv_search_returns_paths_without_binary_content(tmp_path, monkeypatch):
     """A filename search should report matches, not inject document bytes."""
@@ -17,6 +30,23 @@ async def test_cv_search_returns_paths_without_binary_content(tmp_path, monkeypa
 
     assert str(cv_path) in result
     assert "%PDF" not in result
+
+
+@pytest.mark.asyncio
+async def test_spoken_cv_contents_request_extracts_pdf_text(tmp_path, monkeypatch):
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    pdf = desktop / "2024A7PS0148U-MOHAN SRI SAI VARMA-CV_OLD.pdf"
+    pdf.write_bytes(b"%PDF test")
+    monkeypatch.setattr(file_source_module, "ALLOWED_ROOTS", [desktop])
+    monkeypatch.setattr(file_source_module, "PdfReader", _PdfReader)
+
+    result = await FileContextSource().gather_context(
+        "what are the files in the mohan cv file in desktop"
+    )
+
+    assert "Extracted PDF text" in result
+    assert "Education: Computer Science" in result
 
 
 @pytest.mark.asyncio

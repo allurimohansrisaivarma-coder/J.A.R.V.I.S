@@ -45,3 +45,14 @@ def test_history_trimming():
     trimmed = conv.to_llm_messages(max_tokens=10)
     assert len(trimmed) < 11
     assert trimmed[0].role == "system"
+
+
+def test_long_latest_message_is_retained_within_budget():
+    conv = Conversation()
+    conv.add_message(Message.system("System context"))
+    conv.add_message(Message.user("START " + "x" * 10000 + " END"))
+    trimmed = conv.to_llm_messages(max_tokens=100)
+    assert trimmed[-1].role == "user"
+    assert trimmed[-1].content.startswith("START")
+    assert trimmed[-1].content.endswith("END")
+    assert sum(len(m.content) for m in trimmed) <= 400

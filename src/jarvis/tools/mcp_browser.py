@@ -20,15 +20,29 @@ async def get_page() -> Page:
     global _playwright, _browser, _page
     if not _playwright:
         _playwright = await async_playwright().start()
+    if _browser and not _browser.is_connected():
+        _browser = None
+        _page = None
     if not _browser:
         try:
             _browser = await _playwright.chromium.launch(channel="chrome", headless=False)
         except Exception:
-            # Fall back to Playwright's managed Chromium when Chrome is absent.
-            _browser = await _playwright.chromium.launch(headless=False)
-    if not _page:
+            try:
+                _browser = await _playwright.chromium.launch(channel="msedge", headless=False)
+            except Exception:
+                _browser = await _playwright.chromium.launch(headless=False)
+    if not _page or _page.is_closed():
         _page = await _browser.new_page()
+        _page.set_default_timeout(10000)
+        _page.set_default_navigation_timeout(15000)
     return _page
+
+
+async def shutdown():
+    global _playwright, _browser, _page
+    if _playwright:
+        await _playwright.stop()
+    _playwright = _browser = _page = None
 
 
 @mcp.tool()

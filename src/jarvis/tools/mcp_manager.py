@@ -1,6 +1,8 @@
 """MCP Manager for spawning and communicating with Model Context Protocol servers."""
 
 import asyncio
+import importlib
+import json
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -53,6 +55,19 @@ class MCPManager:
         # Maps tool_name -> server_name
         self._tool_registry: dict[str, str] = {}
 
+    async def start_builtin(self, name: str, module_name: str) -> bool:
+        """Run trusted bundled tools directly; no duplicate EXEs or stdio pipes."""
+        try:
+            module = importlib.import_module(module_name)
+            tools = await module.mcp.list_tools()
+            self._servers[name] = {"local": module.mcp, "module": module, "tools": tools}
+            for tool in tools:
+                self._tool_registry.setdefault(tool.name, name)
+            return True
+        except Exception as exc:
+            logger.warning("Builtin tools unavailable", name=name, error=str(exc))
+            return False
+
     async def start_server(self, name: str, command: str, args: list[str]) -> bool:
         """Start an MCP server subprocess."""
         logger.info("Starting MCP server", name=name, command=command, args=args)
@@ -64,12 +79,11 @@ class MCPManager:
             read, write = await stack.enter_async_context(stdio_client(server_params))
             session = await stack.enter_async_context(ClientSession(read, write))
 
-            await session.initialize()
-
-            self._servers[name] = {"session": session, "stack": stack}
+            await asyncio.wait_for(session.initialize(), timeout=10.0)
 
             # Fetch and register tools
             result = await asyncio.wait_for(session.list_tools(), timeout=10.0)
+            self._servers[name] = {"session": session, "stack": stack, "tools": result.tools}
             for tool in result.tools:
                 if tool.name in self._tool_registry:
                     logger.warning(
@@ -94,10 +108,14 @@ class MCPManager:
 
         declarations = []
         for server_name, server_data in self._servers.items():
-            session = server_data["session"]
             try:
-                result = await asyncio.wait_for(session.list_tools(), timeout=5.0)
-                for tool in result.tools:
+                tool_list = server_data.get("tools")
+                if tool_list is None:
+                    result = await asyncio.wait_for(
+                        server_data["session"].list_tools(), timeout=5.0
+                    )
+                    tool_list = server_data["tools"] = result.tools
+                for tool in tool_list:
                     if exclude and tool.name in exclude:
                         continue
                     # Convert JSON Schema to genai types.Schema
@@ -124,11 +142,20 @@ class MCPManager:
         if not server_name:
             return f"Error: Tool '{name}' is not registered."
 
-        session = self._servers[server_name]["session"]
+        server = self._servers[server_name]
         logger.info("Calling MCP tool", tool=name, server=server_name)
 
         try:
-            result = await session.call_tool(name, arguments=args)
+            if "local" in server:
+                result = await asyncio.wait_for(server["local"].call_tool(name, args), timeout=20.0)
+                if isinstance(result, tuple):
+                    result = result[0]
+                if isinstance(result, dict):
+                    return json.dumps(result, ensure_ascii=False)
+                return "\n".join(c.text for c in result if c.type == "text")
+            result = await asyncio.wait_for(
+                server["session"].call_tool(name, arguments=args), timeout=20.0
+            )
 
             # Combine content blocks into a single string
             output = []
@@ -153,7 +180,10 @@ class MCPManager:
         for name, data in reversed(list(self._servers.items())):
             logger.info("Shutting down MCP server", name=name)
             try:
-                await data["stack"].aclose()
+                if "stack" in data:
+                    await data["stack"].aclose()
+                elif cleanup := getattr(data.get("module"), "shutdown", None):
+                    await cleanup()
             except Exception as e:
                 if "generator didn't stop after athrow" not in str(e):
                     logger.warning("Error closing MCP server", name=name, error=str(e))

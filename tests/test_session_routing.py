@@ -6,6 +6,7 @@ import pytest
 
 import jarvis.core.session as session_module
 from jarvis.config.settings import Settings
+from jarvis.core.conversation import ConversationManager
 from jarvis.core.session import SessionManager
 from jarvis.llm.base import ModelTier
 
@@ -21,9 +22,51 @@ def test_session_intent_reserves_gemini_for_complex_or_native_tools():
     assert session._classify_intent_tier("Open calculator") is ModelTier.COMPLEX
 
 
+def test_live_context_query_carries_weather_across_confirmation():
+    session = SessionManager()
+    session.conversation = ConversationManager()
+    session.conversation.add_user_message("Javis, what's the climate tomorrow?")
+    session.conversation.add_assistant_message("I can fetch that forecast.")
+    session.conversation.add_user_message("Yeah, you can do that.")
+
+    resolved = session._resolve_context_query("Yeah, you can do that.")
+
+    assert "climate tomorrow" in resolved
+    assert "Yeah, you can do that" in resolved
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "Open Global Tab",
+        "World Desk",
+        "Open the global dashboard",
+        "Open the file where I can see my CPU speed and all",
+    ],
+)
+def test_world_monitor_aliases_are_deterministic(phrase):
+    assert SessionManager._is_world_monitor_request(phrase) is True
+
+
 @pytest.mark.asyncio
-async def test_initialization_maps_fast_and_standard_to_groq(monkeypatch):
+async def test_world_monitor_stream_emits_ui_action(monkeypatch):
+    session = SessionManager()
+    session._initialized = True
+    session.router = MagicMock()
+    session.conversation = ConversationManager()
+    monkeypatch.setattr(session, "_append_transcript", MagicMock())
+
+    chunks = [chunk async for chunk in session.process_input_stream("Open global dashboard")]
+
+    assert {"__ui_action__": "open_world_monitor"} in chunks
+    assert "Opened the World Monitor dashboard." in chunks
+
+
+@pytest.mark.asyncio
+async def test_initialization_maps_fast_and_standard_to_groq(monkeypatch, tmp_path):
     settings = Settings(gemini_api_key="gemini-test", groq_api_key="groq-test")
+    settings.memory.data_dir = tmp_path / "data"
+    settings.logging.file = tmp_path / "logs" / "jarvis.log"
     gemini = MagicMock()
     gemini.name = "gemini"
     gemini.health_check = AsyncMock(return_value=True)

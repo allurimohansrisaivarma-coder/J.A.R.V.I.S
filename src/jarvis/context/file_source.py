@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 
 import structlog
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 from jarvis.context.base import ContextSource
 
@@ -68,6 +70,8 @@ MAX_DEPTH = 4
 MAX_FILES_LISTED = 40
 MAX_FILES_SCANNED = 1000
 MAX_TEXT_CHARS = 15_000
+MAX_PDF_BYTES = 25 * 1024 * 1024
+MAX_PDF_PAGES = 50
 
 
 class FileContextSource(ContextSource):
@@ -117,24 +121,16 @@ class FileContextSource(ContextSource):
         else:
             roots_to_scan = ALLOWED_ROOTS
 
-        all_files: list[Path] = []
-        for root in roots_to_scan:
-            if root.exists() and self._is_allowed(root):
-                remaining = MAX_FILES_SCANNED - len(all_files)
-                all_files.extend(self._walk(root, depth=0, remaining=remaining))
-            if len(all_files) >= MAX_FILES_SCANNED:
-                break
-
-        if not all_files:
-            return "No matching files were found in the approved local directories."
-
         ignored_terms = {
+            "are",
             "can",
             "you",
             "the",
             "where",
             "have",
             "file",
+            "files",
+            "in",
             "saved",
             "save",
             "desktop",
@@ -163,21 +159,74 @@ class FileContextSource(ContextSource):
             for term in re.findall(r"[a-z0-9]+", q)
             if len(term) >= 2 and term not in ignored_terms
         }
-        mentioned = [
-            path
-            for path in all_files
-            if any(term in re.sub(r"[^a-z0-9]", "", path.stem.lower()) for term in query_terms)
-        ]
+        wants_contents = any(
+            term in q
+            for term in (
+                "read ",
+                "contents",
+                "what does",
+                "show me",
+                "what is in",
+                "what's in",
+                "what are in",
+                "what are the files in",
+                "inside",
+            )
+        )
+
+        # Most spoken Desktop requests refer to a top-level file. Check those
+        # first so a large synced folder does not delay a simple CV lookup.
+        all_files: list[Path] = []
+        for root in roots_to_scan:
+            if not root.exists() or not self._is_allowed(root):
+                continue
+            try:
+                all_files.extend(
+                    entry
+                    for entry in root.iterdir()
+                    if entry.is_file()
+                    and not entry.name.startswith(".")
+                    and not self._is_sensitive(entry)
+                    and self._is_allowed(entry)
+                )
+            except (OSError, PermissionError):
+                continue
+
+        def match_score(path: Path) -> int:
+            stem = re.sub(r"[^a-z0-9]", "", path.stem.casefold())
+            return sum(term in stem for term in query_terms)
+
+        mentioned = sorted(
+            (path for path in all_files if match_score(path)),
+            key=lambda path: (-match_score(path), len(path.name), path.name.casefold()),
+        )
+        strong_top_level_match = bool(
+            mentioned and query_terms and match_score(mentioned[0]) == len(query_terms)
+        )
+
+        if not strong_top_level_match:
+            all_files = []
+            for root in roots_to_scan:
+                if root.exists() and self._is_allowed(root):
+                    remaining = MAX_FILES_SCANNED - len(all_files)
+                    all_files.extend(self._walk(root, depth=0, remaining=remaining))
+                if len(all_files) >= MAX_FILES_SCANNED:
+                    break
+            mentioned = sorted(
+                (path for path in all_files if match_score(path)),
+                key=lambda path: (-match_score(path), len(path.name), path.name.casefold()),
+            )
+
+        if not all_files:
+            return "No matching files were found in the approved local directories."
 
         if "readme" in q and PROJECT_ROOT / "README.md" not in mentioned:
             mentioned.append(PROJECT_ROOT / "README.md")
 
         if mentioned:
             matches = mentioned[:5]
-            wants_contents = any(
-                term in q for term in ("read ", "contents", "what does", "show me")
-            )
-            if wants_contents and len(matches) == 1 and self._is_readable_text(matches[0]):
+            best_is_clear = len(matches) == 1 or match_score(matches[0]) > match_score(matches[1])
+            if wants_contents and best_is_clear and self._is_readable(matches[0]):
                 return self._read_file(matches[0])
             return "Matching local files:\n" + "\n".join(
                 self._describe_file(path) for path in matches
@@ -225,6 +274,13 @@ class FileContextSource(ContextSource):
             and path.suffix.lower() in TEXT_EXTENSIONS
         )
 
+    def _is_readable(self, path: Path) -> bool:
+        return self._is_readable_text(path) or (
+            self._is_allowed(path)
+            and not self._is_sensitive(path)
+            and path.suffix.casefold() == ".pdf"
+        )
+
     def _walk(self, root: Path, depth: int, remaining: int) -> list[Path]:
         """Recursively list a bounded number of files without crossing allowed roots."""
         if depth > MAX_DEPTH or remaining <= 0 or not self._is_allowed(root):
@@ -251,6 +307,8 @@ class FileContextSource(ContextSource):
             return "That path is outside the local directories JARVIS is allowed to access."
         if self._is_sensitive(path):
             return f"File: {path.name} — contents are protected because this may contain secrets."
+        if path.suffix.casefold() == ".pdf":
+            return self._read_pdf(path)
         if not self._is_readable_text(path):
             try:
                 size_kb = path.stat().st_size / 1024
@@ -268,6 +326,25 @@ class FileContextSource(ContextSource):
         except OSError as exc:
             logger.warning("Failed to read local file", path=str(path), error=str(exc))
             return f"File: {path}\n[Unable to read file]"
+
+    def _read_pdf(self, path: Path) -> str:
+        try:
+            if path.stat().st_size > MAX_PDF_BYTES:
+                return f"File: {path.name} — PDF is too large to read safely."
+            reader = PdfReader(path, strict=False)
+            if reader.is_encrypted:
+                return f"File: {path.name} — PDF is password-protected."
+            if len(reader.pages) > MAX_PDF_PAGES:
+                return f"File: {path.name} — PDF has too many pages to read safely."
+            text = "\n\n".join((page.extract_text() or "").strip() for page in reader.pages).strip()
+            if not text:
+                return f"File: {path.name} — no selectable text was found in this PDF."
+            if len(text) > MAX_TEXT_CHARS:
+                text = text[:MAX_TEXT_CHARS] + "\n...[TRUNCATED]"
+            return f"Extracted PDF text from: {path}\n```\n{text}\n```"
+        except (OSError, PdfReadError, ValueError) as exc:
+            logger.warning("Failed to read local PDF", path=str(path), error=str(exc))
+            return f"File: {path.name}\n[Unable to read PDF]"
 
     @staticmethod
     def _describe_file(path: Path) -> str:

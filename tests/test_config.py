@@ -2,7 +2,6 @@
 
 import pytest
 import yaml
-from pydantic import ValidationError
 
 from jarvis.config.settings import (
     GeminiSettings,
@@ -65,15 +64,14 @@ class TestMainSettings:
         assert settings.gemini_api_key == "test-gemini-key-123"
         assert settings.groq_api_key == "test-groq-key-456"
 
-    def test_settings_rejects_empty_keys(self):
-        """Settings should reject empty API key strings."""
-        with pytest.raises(ValidationError):
-            Settings(gemini_api_key="", groq_api_key="test-key")
+    def test_settings_accepts_optional_empty_key(self):
+        settings = Settings(gemini_api_key="", groq_api_key="test-key")
+        assert settings.gemini_api_keys == []
+        assert settings.primary_groq_key == "test-key"
 
-    def test_settings_rejects_whitespace_keys(self):
-        """Settings should reject whitespace-only API key strings."""
-        with pytest.raises(ValidationError):
-            Settings(gemini_api_key="   ", groq_api_key="test-key")
+    def test_settings_accepts_whitespace_as_unconfigured(self):
+        settings = Settings(gemini_api_key="   ", groq_api_key="test-key")
+        assert settings.gemini_api_keys == []
 
     def test_settings_env_prefix(self, monkeypatch):
         """Settings should read from JARVIS_ prefixed env vars."""

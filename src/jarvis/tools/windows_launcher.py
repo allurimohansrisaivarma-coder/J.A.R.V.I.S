@@ -69,6 +69,7 @@ _SITE_URLS = {
 }
 
 _NON_APPLICATION_TARGETS = {
+    "dashboard",
     "file",
     "folder",
     "document",
@@ -76,6 +77,7 @@ _NON_APPLICATION_TARGETS = {
     "webpage",
     "page",
     "tab",
+    "monitor",
     "link",
     "url",
 }

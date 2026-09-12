@@ -1,5 +1,6 @@
 """Model routing layer."""
 
+import asyncio
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -16,6 +17,7 @@ from jarvis.llm.base import (
     ModelTier,
     ProviderUnavailableError,
     RateLimitError,
+    has_images,
 )
 from jarvis.utils.metrics import metrics
 
@@ -25,10 +27,17 @@ logger = structlog.get_logger(__name__)
 class ModelRouter:
     """Routes LLM requests to appropriate models based on intent and load."""
 
-    def __init__(self, providers: dict[ModelTier, LLMProvider], settings: RouterSettings):
+    def __init__(
+        self,
+        providers: dict[ModelTier, LLMProvider],
+        settings: RouterSettings,
+        vision_fallback: LLMProvider | None = None,
+    ):
         """Initialize the router."""
         self.providers = providers
         self.settings = settings
+        self.vision_fallback = vision_fallback
+
         # Track provider failures (dict of tier to list of failure timestamps)
         self._provider_failures: dict[ModelTier, list[float]] = {tier: [] for tier in ModelTier}
         self._provider_ttft: dict[ModelTier, list[float]] = {tier: [] for tier in ModelTier}
@@ -164,10 +173,29 @@ class ModelRouter:
         """Route the query to the optimal model based on intent analysis."""
         target_tier = await self._classify_intent(messages)
 
-        if target_tier in self.providers:
-            return await self.providers[target_tier].generate(messages, **kwargs)
-        logger.warning("router.missing_provider", tier=target_tier.value)
         return await self.generate_with_fallback(messages, target_tier=target_tier, **kwargs)
+
+    def _candidates(self, tiers: list[ModelTier], messages: list[Message]):
+        visual = has_images(messages)
+        if visual and self.vision_fallback:
+            yield ModelTier.FAST, self.vision_fallback
+        for tier in tiers:
+            provider = self.providers.get(tier)
+            if provider is not None and (not visual or provider.supports_images is True):
+                yield tier, provider
+
+    @staticmethod
+    async def _bounded_stream(stream):
+        """A stalled cloud connection must not hold the UI indefinitely."""
+        try:
+            while True:
+                try:
+                    yield await asyncio.wait_for(anext(stream), timeout=25.0)
+                except StopAsyncIteration:
+                    return
+        finally:
+            if hasattr(stream, "aclose"):
+                await stream.aclose()
 
     async def route_stream(
         self,
@@ -196,15 +224,13 @@ class ModelRouter:
         last_error = None
 
         attempted_provider_ids: set[int] = set()
-        for tier in tiers_to_try:
-            if tier not in self.providers:
+        for tier, provider in self._candidates(tiers_to_try, messages):
+            if kwargs.get("tools") and provider.name != "gemini":
                 continue
-
             if not self._is_provider_healthy(tier):
                 logger.warning("router.provider_unhealthy_skip", tier=tier.value)
                 continue
 
-            provider = self.providers[tier]
             if id(provider) in attempted_provider_ids:
                 continue
             attempted_provider_ids.add(id(provider))
@@ -216,15 +242,15 @@ class ModelRouter:
                 model=model_name,
             )
 
+            chunk_yielded = False
             try:
                 stream_iter = provider.stream(messages, **kwargs)
-                chunk_yielded = False
 
                 # Yield metadata for the UI
                 yield {"__metadata__": {"provider": provider.name, "model": model_name}}
 
                 ttft_start = time.perf_counter()
-                async for chunk in stream_iter:
+                async for chunk in self._bounded_stream(stream_iter):
                     if not chunk_yielded:
                         ttft = time.perf_counter() - ttft_start
                         metrics.record_ttft(ttft)
@@ -238,6 +264,10 @@ class ModelRouter:
                         )
                     chunk_yielded = True
                     yield chunk
+                if not chunk_yielded:
+                    raise ProviderUnavailableError(
+                        f"{provider.name} returned an empty streaming response"
+                    )
                 self._record_success(tier)
                 return  # Success
             except Exception as e:
@@ -255,7 +285,7 @@ class ModelRouter:
                 last_error = e
                 if chunk_yielded:
                     # Can't seamlessly fallback if we already output partial text
-                    yield f"\n\n[Error: Connection interrupted. {e}]"
+                    raise LLMError("The reply was interrupted. Please retry.") from e
                     return
                 # If nothing yielded yet, loop continues to the next tier fallback
                 continue
@@ -287,15 +317,13 @@ class ModelRouter:
         last_error = None
 
         attempted_provider_ids: set[int] = set()
-        for tier in tiers_to_try:
-            if tier not in self.providers:
+        for tier, provider in self._candidates(tiers_to_try, messages):
+            if kwargs.get("tools") and provider.name != "gemini":
                 continue
-
             if not self._is_provider_healthy(tier):
                 logger.warning("router.provider_unhealthy_skip", tier=tier.value)
                 continue
 
-            provider = self.providers[tier]
             if id(provider) in attempted_provider_ids:
                 continue
             attempted_provider_ids.add(id(provider))
@@ -309,7 +337,11 @@ class ModelRouter:
 
             try:
                 start_time = time.perf_counter()
-                response = await provider.generate(messages, **kwargs)
+                response = await asyncio.wait_for(
+                    provider.generate(messages, **kwargs), timeout=30.0
+                )
+                if not response.content.strip() and not response.tool_calls:
+                    raise ProviderUnavailableError(f"{provider.name} returned an empty response")
                 latency_s = time.perf_counter() - start_time
                 self._record_success(tier)
                 logger.info(

@@ -4,6 +4,7 @@
 import asyncio
 import inspect
 import os
+import re
 import tempfile
 from collections.abc import AsyncIterator, Callable
 
@@ -21,8 +22,13 @@ _SENTENCE_ENDS = {".", "!", "?", "\n"}
 _CLAUSE_ENDS = {",", ";", ":"}
 _MIN_PHRASE_CHARS = 28
 _FIRST_PHRASE_TARGET = 72
-_PHRASE_TARGET = 120
-_MAX_PHRASE_OVERRUN = 20
+_PHRASE_TARGET = 220
+_MAX_PHRASE_OVERRUN = 40
+_SYNTHESIS_ATTEMPTS = 4
+_SYNTHESIS_TIMEOUT_SECONDS = 15.0
+_SYNTHESIS_RETRY_DELAYS = (0.4, 1.0, 2.0)
+_URL_PATTERN = r"(?:https?://|www\.)[^\s<>]+|(?<![\w@])(?:[a-z0-9-]+\.)+(?:com|org|net|edu|gov|io|co|ai|uk|in|ae)\b(?:[/?#][^\s<>]*)?"
+_WINDOWS_PATH_PATTERN = r"(?<!\w)[A-Za-z]:[\\/][^\r\n`<>]+"
 
 
 class TTSProvider:
@@ -47,6 +53,8 @@ class TTSProvider:
         self._is_speaking = False
         self._stop_requested = False
         self._current_queue: asyncio.Queue[str | None] | None = None
+        self._notice_sent = False
+        self.on_unavailable: Callable[[str], object] | None = None
 
         # Try to initialize pygame mixer as primary playback
         self._use_pygame = False
@@ -61,13 +69,57 @@ class TTSProvider:
 
     def _clean_text(self, text: str) -> str:
         """Remove markdown artifacts that TTS would try to pronounce."""
-        clean = text.replace("*", "").replace("#", "").replace("`", "")
+        clean = re.sub(
+            rf"`{_WINDOWS_PATH_PATTERN}`",
+            "the file location shown in chat",
+            text,
+        )
+        clean = clean.replace("*", "").replace("#", "").replace("`", "")
         clean = clean.replace("---", "").replace("___", "")
-        # Remove markdown links: [text](url) -> text
-        import re
-
+        # Keep readable source names in speech, never URL syntax or footnote IDs.
         clean = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", clean)
-        return clean.strip()
+        clean = re.sub(_URL_PATTERN, " ", clean, flags=re.IGNORECASE)
+        clean = re.sub(_WINDOWS_PATH_PATTERN, "the file location shown in chat", clean)
+        clean = re.sub(r"【[^】]*】|\[\d+(?:[, -]\d+)*\]", "", clean)
+        clean = re.sub(r"(?im)^\s*(?:sources?|references?|links?)\s*:\s*[(),.;\s]*$", "", clean)
+        clean = re.sub(r"[<>]", "", clean)
+        clean = clean.strip()
+        # Edge TTS raises NoAudioReceived for formatting remnants such as a
+        # standalone Markdown bullet. They are layout, not speech.
+        return clean if any(character.isalnum() for character in clean) else ""
+
+    async def _speech_unavailable(self, text: str) -> None:
+        """Keep text available without silently substituting a different voice."""
+        if not self._notice_sent:
+            self._notice_sent = True
+            message = "The selected JARVIS voice is temporarily unavailable. The reply is shown in chat; no other voice will be substituted."
+            logger.warning(message)
+            if self.on_unavailable:
+                result = self.on_unavailable(message)
+                if inspect.isawaitable(result):
+                    await result
+
+    async def _save_voice(self, text: str, path: str, voice: str, rate: str, pitch: str) -> None:
+        """Retry transient synthesis failures without changing the selected voice."""
+        for attempt in range(_SYNTHESIS_ATTEMPTS):
+            try:
+                await asyncio.wait_for(
+                    edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(path),
+                    timeout=_SYNTHESIS_TIMEOUT_SECONDS,
+                )
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if attempt == _SYNTHESIS_ATTEMPTS - 1 or self._stop_requested:
+                    raise
+                logger.warning(
+                    "Retrying selected voice synthesis",
+                    voice=voice,
+                    attempt=attempt + 2,
+                    error_type=type(exc).__name__,
+                )
+                await asyncio.sleep(_SYNTHESIS_RETRY_DELAYS[attempt])
 
     async def speak(self, text: str) -> None:
         """Synthesize and play speech (blocking, full text at once).
@@ -86,6 +138,14 @@ class TTSProvider:
 
         self._is_speaking = True
         self._stop_requested = False
+        self._notice_sent = False
+
+        if not self._use_pygame:
+            try:
+                await self._speech_unavailable(clean_text)
+            finally:
+                self._is_speaking = False
+            return
 
         fd, temp_path = tempfile.mkstemp(suffix=".mp3")
         os.close(fd)
@@ -98,10 +158,7 @@ class TTSProvider:
 
         try:
             logger.debug("Generating TTS audio", text_length=len(clean_text), voice=self.voice)
-            communicate = edge_tts.Communicate(
-                clean_text, self.voice, rate=rate_str, pitch=self.pitch
-            )
-            await communicate.save(temp_path)
+            await self._save_voice(clean_text, temp_path, self.voice, rate_str, self.pitch)
 
             if self._stop_requested:
                 return
@@ -116,6 +173,7 @@ class TTSProvider:
 
         except Exception as e:
             logger.error("Error during TTS playback", error=str(e))
+            await self._speech_unavailable(clean_text)
         finally:
             self._is_speaking = False
             if self._use_pygame:
@@ -139,11 +197,36 @@ class TTSProvider:
         if not buffer.strip():
             return None, buffer
 
+        # Do not split URLs or Markdown links between synthesis requests: a
+        # fragment such as 'com/results' cannot be recognized as a URL later.
+        protected = [
+            m.span()
+            for m in re.finditer(
+                r"\[[^\]]*(?:\](?:\([^)]*(?:\)|$))?)?|"
+                + _URL_PATTERN
+                + "|"
+                + _WINDOWS_PATH_PATTERN,
+                buffer,
+                re.IGNORECASE,
+            )
+        ]
+        if not final:
+            partial_domain = re.search(r"(?<![\w@])(?:[\w-]+\.)+[\w-]*(?:[/?#][^\s<>]*)?$", buffer)
+            if partial_domain:
+                protected.append(partial_domain.span())
+
+        def safe_boundary(end: int) -> bool:
+            return not any(
+                start < end < stop or (not final and start < end == stop == len(buffer))
+                for start, stop in protected
+            )
+
         punctuation_positions = [
             index
             for index, char in enumerate(buffer)
             if char in _SENTENCE_ENDS
             and _MIN_PHRASE_CHARS <= index + 1 <= target + _MAX_PHRASE_OVERRUN
+            and safe_boundary(index + 1)
         ]
         if punctuation_positions:
             end = punctuation_positions[0] + 1
@@ -154,6 +237,7 @@ class TTSProvider:
             for index, char in enumerate(buffer)
             if char in _CLAUSE_ENDS
             and _MIN_PHRASE_CHARS <= index + 1 <= target + _MAX_PHRASE_OVERRUN
+            and safe_boundary(index + 1)
         ]
         if clause_positions and (len(buffer) >= target or final):
             end = clause_positions[0] + 1
@@ -163,6 +247,8 @@ class TTSProvider:
             # Never cut through a word.  A short extension is less disruptive
             # than a clipped word, and keeps playback conversational.
             end = buffer.rfind(" ", 0, target + 1)
+            while end > 0 and not safe_boundary(end):
+                end = buffer.rfind(" ", 0, end)
             if end > 0:
                 return buffer[:end].strip(), buffer[end:]
 
@@ -185,9 +271,12 @@ class TTSProvider:
         self._is_speaking = True
         self._stop_requested = False
 
+        self._notice_sent = False
+        utterance_voice, utterance_rate, utterance_pitch = self.voice, self.rate, self.pitch
         # Pipeline queues
         text_queue: asyncio.Queue[str | None] = asyncio.Queue()
-        audio_queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
+        audio_queue: asyncio.Queue[tuple[str | None, str] | None] = asyncio.Queue()
+        temp_files: set[str] = set()
 
         # Keep track of generated temp paths so we can clean them up if stopped
         self._current_queue = text_queue
@@ -224,6 +313,7 @@ class TTSProvider:
                         is_first_phrase = False
             except Exception as e:
                 logger.error("Error buffering text", error=str(e))
+                raise
             finally:
                 await text_queue.put(None)
 
@@ -237,22 +327,27 @@ class TTSProvider:
 
                     clean = self._clean_text(phrase)
                     if not clean:
+                        await audio_queue.put((None, phrase))
+                        continue
+
+                    if not self._use_pygame:
+                        await audio_queue.put((None, phrase))
                         continue
 
                     fd, temp_path = tempfile.mkstemp(suffix=".mp3")
                     os.close(fd)
+                    temp_files.add(temp_path)
 
-                    rate_str = str(self.rate).strip()
+                    rate_str = str(utterance_rate).strip()
                     if not rate_str.endswith("%"):
                         rate_str += "%"
                     if not rate_str.startswith("+") and not rate_str.startswith("-"):
                         rate_str = f"+{rate_str}"
 
                     try:
-                        communicate = edge_tts.Communicate(
-                            clean, self.voice, rate=rate_str, pitch=self.pitch
+                        await self._save_voice(
+                            clean, temp_path, utterance_voice, rate_str, utterance_pitch
                         )
-                        await communicate.save(temp_path)
 
                         if self._stop_requested:
                             os.unlink(temp_path)
@@ -261,12 +356,9 @@ class TTSProvider:
                         await audio_queue.put((temp_path, phrase))
                     except Exception as e:
                         logger.error("Error downloading phrase", error=str(e))
-                        # Do not leave the chat stream blank if synthesis is
-                        # temporarily unavailable; the text is still useful.
-                        if on_phrase_ready:
-                            callback_result = on_phrase_ready(phrase)
-                            if inspect.isawaitable(callback_result):
-                                await callback_result
+                        # Preserve phrase ordering and continue trying the same
+                        # selected voice for later phrases after an isolated failure.
+                        await audio_queue.put((None, phrase))
                         try:
                             os.unlink(temp_path)
                         except Exception:
@@ -283,20 +375,28 @@ class TTSProvider:
                         break
                     temp_path, phrase = audio_item
 
+                    if on_phrase_ready:
+                        callback_result = on_phrase_ready(phrase + " ")
+                        if inspect.isawaitable(callback_result):
+                            await callback_result
+
+                    if temp_path is None:
+                        clean = self._clean_text(phrase)
+                        if clean:
+                            await self._speech_unavailable(clean)
+                        continue
+
                     if self._use_pygame:
                         import pygame
 
                         try:
                             pygame.mixer.music.load(temp_path)
-                            if on_phrase_ready:
-                                callback_result = on_phrase_ready(phrase)
-                                if inspect.isawaitable(callback_result):
-                                    await callback_result
                             pygame.mixer.music.play()
                             while pygame.mixer.music.get_busy() and not self._stop_requested:
                                 await asyncio.sleep(0.05)
                         except Exception as e:
                             logger.error("Error playing chunk", error=str(e))
+                            await self._speech_unavailable(self._clean_text(phrase))
                         finally:
                             try:
                                 pygame.mixer.music.unload()
@@ -310,9 +410,6 @@ class TTSProvider:
                     elif on_phrase_ready:
                         # Keep the text channel usable even when the local
                         # audio backend is unavailable.
-                        callback_result = on_phrase_ready(phrase)
-                        if inspect.isawaitable(callback_result):
-                            await callback_result
                         try:
                             if os.path.exists(temp_path):
                                 os.unlink(temp_path)
@@ -325,7 +422,7 @@ class TTSProvider:
                     if item:
                         path, _ = item
                         try:
-                            if os.path.exists(path):
+                            if path and os.path.exists(path):
                                 os.unlink(path)
                         except Exception:
                             pass
@@ -339,7 +436,23 @@ class TTSProvider:
 
         except Exception as e:
             logger.error("Error in streaming TTS", error=str(e))
+            raise
         finally:
+            self._stop_requested = True
+            for task in (buffer_task, download_task, play_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(buffer_task, download_task, play_task, return_exceptions=True)
+            if self._use_pygame:
+                import pygame
+
+                pygame.mixer.music.stop()
+                pygame.mixer.music.unload()
+            for path in temp_files:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
             self._is_speaking = False
             self._current_queue = None
 

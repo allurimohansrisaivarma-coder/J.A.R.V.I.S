@@ -10,9 +10,12 @@ let currentJarvisBubble = null;
 let currentJarvisText = "";
 let currentJarvisMeta = "";
 let isRecording = false;
+let replyPending = false;
+let historyLoaded = false;
 
 // Widget state
 let isWidgetMode = false;
+let widgetTransition = false;
 
 // ── DOM References ──
 const aiCore          = document.getElementById("ai-core");
@@ -38,6 +41,7 @@ const settingRate     = document.getElementById("setting-rate");
 const settingWeatherCity = document.getElementById("setting-weather-city");
 const minimizeBtn     = document.getElementById("minimize-btn");
 const widgetExpandBtn = document.getElementById("widget-expand-btn");
+const widgetMicBtn    = document.getElementById("widget-mic-btn");
 const closeBtn        = document.getElementById("close-btn");
 
 // World Monitor DOM
@@ -58,11 +62,14 @@ function connectWebSocket() {
     const queryParams = new URLSearchParams(window.location.search);
     const hashParams = new URLSearchParams(window.location.hash.slice(1));
     const port = queryParams.get("port") || hashParams.get("port") || "8741";
-    ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    const token = hashParams.get("token") || "";
+    ws = new WebSocket(`ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`);
 
     ws.onopen = () => {
         console.log("WebSocket connected");
-        requestDashboardData(); // Fetch initial stats and memory
+        requestDashboardData(true); // Fetch initial stats and memory
+        ws.send(JSON.stringify({ type: "get_settings" }));
+        if (!historyLoaded) ws.send(JSON.stringify({type: "get_history"}));
         reconnectTimeout = 1000;
         updateCoreState("IDLE");
         if (dashboardInterval) clearInterval(dashboardInterval);
@@ -79,7 +86,10 @@ function connectWebSocket() {
     };
 
     ws.onclose = () => {
+        isRecording = false;
+        replyPending = false;
         console.log("Disconnected from JARVIS HUD");
+        document.querySelector(".hud-sys-status").textContent = "JARVIS // RECONNECTING";
         updateCoreState("OFFLINE");
         if (dashboardInterval) {
             clearInterval(dashboardInterval);
@@ -117,6 +127,7 @@ function appendTerminalLog(text) {
 
     line.textContent = text;
     termContainer.appendChild(line);
+    while (termContainer.children.length > 200) termContainer.firstElementChild.remove();
     termContainer.scrollTop = termContainer.scrollHeight;
 }
 
@@ -125,7 +136,19 @@ function appendTerminalLog(text) {
 // ========================================
 
 function handleMessage(data) {
-    if (data.type === "chunk") {
+    if (data.type === "history_data") {
+        if (!historyLoaded && !replyPending && !chatContainer.querySelector('.hud-message.user')) {
+            for (const message of data.messages || []) {
+                const bubble = createMessageBubble(message.role === "user" ? "user" : "jarvis");
+                bubble.innerHTML = renderMarkdown(message.text);
+            }
+            scrollToBottom();
+        }
+        historyLoaded = true;
+    } else if (data.type === "history_cleared") {
+        chatContainer.replaceChildren();
+        document.getElementById("settings-feedback").textContent = "Saved conversation history cleared.";
+    } else if (data.type === "chunk") {
         if (!currentJarvisBubble) {
             currentJarvisBubble = createMessageBubble("jarvis");
             currentJarvisText = "";
@@ -137,16 +160,21 @@ function handleMessage(data) {
         scrollToBottom();
 
     } else if (data.type === "done") {
+        replyPending = false;
         currentJarvisBubble = null;
         currentJarvisText = "";
         currentJarvisMeta = "";
 
     } else if (data.type === "state") {
+        if (data.state === "IDLE") {
+            replyPending = false;
+            isRecording = false;
+        }
         updateCoreState(data.state);
 
     } else if (data.type === "audio_level") {
         if (aiCore.classList.contains("LISTENING") || aiCore.classList.contains("RECORDING")) {
-            const center = aiCore.querySelector(".core-center");
+            const center = aiCore.querySelector(".svg-center");
             if (center) {
                 const scale = 1.0 + (data.level * 15.0);
                 const clamped = Math.min(Math.max(scale, 1.0), 1.8);
@@ -156,15 +184,34 @@ function handleMessage(data) {
 
     } else if (data.type === "terminal") {
         appendTerminalLog(data.text);
+    } else if (data.type === "notice") {
+        const bubble = createMessageBubble("system");
+        bubble.textContent = `SYSTEM> ${data.message}`;
+        scrollToBottom();
     } else if (data.type === "error") {
+        replyPending = false;
+        isRecording = false;
+        document.getElementById("settings-feedback").textContent = data.message || "Request failed";
         const bubble = createMessageBubble("system");
         bubble.textContent = `SYSTEM> ${data.message || "Request failed"}`;
         scrollToBottom();
     } else if (data.type === "user_msg") {
         appendUserMessage(data.text);
 
+    } else if (data.type === "capabilities") {
+        document.querySelector(".hud-sys-status").textContent = data.chat ? "JARVIS // CONNECTED" : "JARVIS // SETUP REQUIRED";
+        micBtn.disabled = !data.voice;
+        widgetMicBtn.disabled = !data.voice;
+        micBtn.title = data.voice ? "Hold to speak" : "Add a Groq key in Settings to enable voice";
+        if (!data.chat) {
+            settingsModal.classList.remove("hidden");
+            document.getElementById("settings-feedback").textContent = "Add at least one API key to enable AI. Groq enables voice input as well.";
+        }
+    } else if (data.type === "settings_saved") {
+        document.getElementById("settings-feedback").textContent = "Preferences saved.";
     } else if (data.type === "settings_data") {
         settingHotkey.value = data.settings.push_to_talk_key || "ctrl+shift+j";
+        document.getElementById("voice-shortcut-label").textContent = settingHotkey.value.replaceAll("+", " ").toUpperCase();
         settingSilence.value = data.settings.silence_duration || 0.5;
         settingVoice.value  = data.settings.tts_voice || "en-GB-RyanNeural";
         settingRate.value   = data.settings.tts_rate || "+20%";
@@ -192,7 +239,9 @@ function handleMessage(data) {
         const list = document.getElementById("memory-list");
         list.innerHTML = "";
         if (data.memories.length === 0) {
-            list.innerHTML = `<div style="text-align: center; color: rgba(0, 255, 255, 0.4);">No memories found.</div>`;
+            list.textContent = data.disabled ? "Pinned facts are disabled. Conversation history is saved separately." : "No memories found.";
+            newMemoryInput.disabled = Boolean(data.disabled);
+            addMemoryBtn.disabled = Boolean(data.disabled);
         } else {
             data.memories.forEach(m => {
                 const item = document.createElement("div");
@@ -236,6 +285,14 @@ function handleMessage(data) {
 function updateCoreState(stateStr) {
     aiCore.className = `ai-core ${stateStr}`;
     coreStatusText.innerText = stateStr;
+    document.body.dataset.state = stateStr;
+    document.querySelector(".widget-drag-surface").title = `${stateStr} · Drag to move · Ctrl+Alt+J to restore`;
+    aiCore.querySelector(".svg-center").style.transform = "";
+    widgetMicBtn.classList.toggle("active", stateStr === "RECORDING" || stateStr === "LISTENING");
+    document.querySelector(".reactor-footer > span").textContent = {
+        IDLE: "READY WHEN YOU ARE", THINKING: "WORKING ON YOUR REQUEST", SPEAKING: "VOICE RESPONSE ACTIVE",
+        RECORDING: "LISTENING TO YOU", LISTENING: "LISTENING TO YOU", OFFLINE: "RECONNECTING TO JARVIS"
+    }[stateStr] || stateStr;
 
     if (stateStr === "RECORDING" || stateStr === "LISTENING") {
         micBtn.classList.add("active");
@@ -286,14 +343,17 @@ function scrollToBottom() {
 //  Text Input — Send
 // ========================================
 
-function sendMessage() {
-    const text = messageInput.value.trim();
-    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+function sendMessage(command = null) {
+    const text = typeof command === "string" ? command : messageInput.value.trim();
+    if (!text || replyPending || !ws || ws.readyState !== WebSocket.OPEN) return;
+    replyPending = true;
 
     appendUserMessage(text);
     ws.send(JSON.stringify({ type: "chat", text: text }));
-    messageInput.value = "";
-    messageInput.style.height = "auto";
+    if (typeof command !== "string") {
+        messageInput.value = "";
+        messageInput.style.height = "auto";
+    }
 }
 
 sendBtn.addEventListener("click", sendMessage);
@@ -317,7 +377,7 @@ messageInput.addEventListener("input", function () {
 // ========================================
 
 function startRecording() {
-    if (isRecording) return;
+    if (isRecording || micBtn.disabled) return;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
     isRecording = true;
@@ -352,24 +412,31 @@ function stopRecording() {
 
 // Mic button: hold to speak
 micBtn.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
     e.preventDefault();
+    micBtn.setPointerCapture(e.pointerId);
     startRecording();
 });
 micBtn.addEventListener("pointerup", stopRecording);
-micBtn.addEventListener("pointerleave", stopRecording);
 micBtn.addEventListener("pointercancel", stopRecording);
+micBtn.addEventListener("lostpointercapture", stopRecording);
 micBtn.addEventListener("contextmenu", (e) => e.preventDefault());
+micBtn.addEventListener("keydown", event => { if (["Space", "Enter"].includes(event.code)) { event.preventDefault(); startRecording(); } });
+micBtn.addEventListener("keyup", event => { if (["Space", "Enter"].includes(event.code)) { event.preventDefault(); stopRecording(); } });
 
 // Spacebar: hold to speak (only when textarea is NOT focused)
+function isEditingText() {
+    return document.activeElement?.matches("input, textarea, select, button, [contenteditable='true']");
+}
 document.addEventListener("keydown", (e) => {
-    if (e.code === "Space" && document.activeElement !== messageInput) {
+    if (e.code === "Space" && !isEditingText() && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         startRecording();
     }
 });
 
 document.addEventListener("keyup", (e) => {
-    if (e.code === "Space" && document.activeElement !== messageInput) {
+    if (e.code === "Space" && isRecording) {
         e.preventDefault();
         stopRecording();
     }
@@ -380,32 +447,68 @@ document.addEventListener("keyup", (e) => {
 //  Minimize / Widget Toggle
 // ========================================
 
-minimizeBtn.addEventListener("click", async () => {
-    if (isWidgetMode) return;
-    isWidgetMode = true;
-    document.body.classList.add("widget-mode");
+async function toggleWidgetMode() {
+    if (widgetTransition) return;
+    widgetTransition = true;
+    const nextMode = !isWidgetMode;
+    document.body.classList.toggle("widget-interactive", nextMode);
+    stopRecording();
     try {
         if (!window.pywebview || !window.pywebview.api) throw new Error("Native UI bridge unavailable");
-        const collapsed = await window.pywebview.api.collapse_to_widget();
-        if (!collapsed) throw new Error("Native window rejected widget mode");
+        // Paint the compact layout before shrinking; restore the full layout after expansion.
+        if (nextMode) document.body.classList.add("widget-mode");
+        const changed = nextMode ? await window.pywebview.api.collapse_to_widget() : await window.pywebview.api.expand_to_window();
+        if (!changed) throw new Error("Native window rejected the transition");
+        isWidgetMode = nextMode;
+        document.body.classList.toggle("widget-mode", isWidgetMode);
+        if (!isWidgetMode) requestDashboardData();
+        document.body.classList.add("window-transition");
+        setTimeout(() => document.body.classList.remove("window-transition"), 220);
     } catch (error) {
-        isWidgetMode = false;
-        document.body.classList.remove("widget-mode");
-        appendTerminalLog(`Failed: Widget mode unavailable (${error.message || error})`);
+        document.body.classList.toggle("widget-mode", isWidgetMode);
+        appendTerminalLog(`Failed: Window change unavailable (${error.message || error})`);
+    } finally {
+        widgetTransition = false;
     }
-});
+}
+minimizeBtn.addEventListener("click", toggleWidgetMode);
 
 widgetExpandBtn.addEventListener("click", async (event) => {
     if (!isWidgetMode) return;
     event.stopPropagation();
-    try {
-        if (!window.pywebview || !window.pywebview.api) throw new Error("Native UI bridge unavailable");
-        const expanded = await window.pywebview.api.expand_to_window();
-        if (!expanded) throw new Error("Native window rejected expansion");
-        isWidgetMode = false;
-        document.body.classList.remove("widget-mode");
-    } catch (error) {
-        appendTerminalLog(`Failed: Could not restore window (${error.message || error})`);
+    await toggleWidgetMode();
+});
+
+widgetMicBtn.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    widgetMicBtn.setPointerCapture(event.pointerId);
+    startRecording();
+});
+widgetMicBtn.addEventListener("pointerup", stopRecording);
+widgetMicBtn.addEventListener("pointercancel", stopRecording);
+widgetMicBtn.addEventListener("lostpointercapture", stopRecording);
+widgetMicBtn.addEventListener("keydown", event => { if (["Space", "Enter"].includes(event.code)) { event.preventDefault(); startRecording(); } });
+widgetMicBtn.addEventListener("keyup", event => { if (["Space", "Enter"].includes(event.code)) { event.preventDefault(); stopRecording(); } });
+widgetMicBtn.addEventListener("contextmenu", event => event.preventDefault());
+
+// Buttons must not start a native drag. Only the header background and circular surface drag.
+document.querySelector(".hud-controls").addEventListener("mousedown", event => event.stopPropagation());
+async function updateShortcutAvailability() {
+    if (!window.pywebview?.api?.get_desktop_shortcuts) return;
+    const enabled = await window.pywebview.api.get_desktop_shortcuts();
+    const missing = ["toggle", "screen", "stop", "interact"].filter(action => !enabled.includes(action));
+    document.getElementById("shortcut-status").textContent = missing.length ?
+        `Shortcut unavailable (${missing.join(", ")}); another app may use it. Window controls still work.` :
+        "Click the orb center to reopen. Ctrl+Alt+D toggles click-through.";
+}
+window.addEventListener("jarvis-shortcuts-ready", updateShortcutAvailability);
+window.addEventListener("jarvis-shortcut", event => {
+    if (event.detail === "toggle") toggleWidgetMode();
+    if (event.detail === "screen") readScreenCommand();
+    if (event.detail === "stop") cancelReply();
+    if (event.detail === "interact" && isWidgetMode) {
+        window.pywebview.api.toggle_widget_interaction().then(enabled => document.body.classList.toggle("widget-interactive", enabled)).catch(error => appendTerminalLog(`Failed: ${error}`));
     }
 });
 
@@ -426,10 +529,14 @@ document.querySelectorAll('.close-app-btn').forEach(btn => {
 //  Dashboard Memory & Stats
 // ========================================
 
-function requestDashboardData() {
+function requestDashboardData(includeMemory = false) {
+    if (isWidgetMode && !includeMemory) return;
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "get_stats" }));
-        ws.send(JSON.stringify({ type: "get_memories", filter: memoryFilter.value }));
+        if (includeMemory) ws.send(JSON.stringify({ type: "get_memories", filter: memoryFilter.value }));
+        if (!isWidgetMode && !worldMonitor.classList.contains("hidden")) {
+            ws.send(JSON.stringify({ type: "get_world_monitor" }));
+        }
     }
 }
 
@@ -459,16 +566,6 @@ newMemoryInput.addEventListener("keydown", (e) => {
     }
 });
 
-// Update stats every 5 seconds
-setInterval(() => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "get_stats" }));
-        if (!worldMonitor.classList.contains("hidden")) {
-            ws.send(JSON.stringify({ type: "get_world_monitor" }));
-        }
-    }
-}, 5000);
-
 // ========================================
 //  World Monitor
 // ========================================
@@ -478,8 +575,8 @@ closeMonitorBtn.addEventListener("click", () => {
 });
 
 function updateWorldMonitor(data) {
-    if (data.ram) wmRam.innerText = data.ram + "%";
-    if (data.cpu) wmCpu.innerText = data.cpu + "%";
+    if (data.ram !== undefined) wmRam.innerText = data.ram + "%";
+    if (data.cpu !== undefined) wmCpu.innerText = data.cpu + "%";
     if (data.weather) wmWeather.innerHTML = data.weather;
     if (data.news) wmNews.innerHTML = data.news;
     if (data.schedule) wmSchedule.innerHTML = data.schedule;
@@ -519,8 +616,37 @@ saveSettingsBtn.addEventListener("click", () => {
             }
         }));
     }
-    settingsModal.classList.add("hidden");
 });
+
+document.getElementById("save-keys-btn").addEventListener("click", async () => {
+    const feedback = document.getElementById("settings-feedback");
+    try {
+        const result = await window.pywebview.api.save_provider_keys(
+            document.getElementById("groq-key").value, document.getElementById("gemini-key").value
+        );
+        feedback.textContent = result.message;
+        if (result.ok) {
+            document.getElementById("groq-key").value = "";
+            document.getElementById("gemini-key").value = "";
+        }
+    } catch (_) {
+        feedback.textContent = "Key setup is available in the JARVIS desktop window.";
+    }
+});
+
+function cancelReply() {
+    stopRecording();
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: "cancel"}));
+}
+document.getElementById("stop-btn").addEventListener("click", cancelReply);
+function readScreenCommand() {
+    if (replyPending) return;
+    sendMessage("Read my screen and explain what is visible.");
+}
+document.getElementById("screen-btn").addEventListener("click", readScreenCommand);
+window.addEventListener("blur", stopRecording);
+document.addEventListener("visibilitychange", () => { if (document.hidden) stopRecording(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") cancelReply(); });
 
 
 // ========================================
@@ -538,6 +664,7 @@ function escapeHtml(unsafe) {
 
 function renderMarkdown(text) {
     let html = escapeHtml(text);
+    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
     html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
     html = html.replace(/\*(.*?)\*/g, "<em>$1</em>");
     html = html.replace(/```([\s\S]*?)```/g, "<pre><code>$1</code></pre>");
@@ -550,3 +677,10 @@ function renderMarkdown(text) {
 //  Boot
 // ========================================
 connectWebSocket();
+
+document.getElementById("clear-history-btn").addEventListener("click", () => {
+    if (replyPending) { document.getElementById("settings-feedback").textContent = "Stop the current reply first."; return; }
+    if (ws?.readyState === WebSocket.OPEN && window.confirm("Delete saved conversation history on this computer? This cannot be undone.")) {
+        ws.send(JSON.stringify({type: "clear_history"}));
+    }
+});

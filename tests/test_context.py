@@ -1,5 +1,6 @@
 """Tests for the Context Engine."""
 
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -76,7 +77,18 @@ async def test_web_source_prefers_single_mcp_retrieval(monkeypatch):
     source = WebContextSource()
     monkeypatch.setattr(source, "_search", lambda _query: pytest.fail("direct fallback used"))
     mcp = AsyncMock()
-    mcp.call_tool.return_value = "Result 1:\nTitle: Current news"
+    mcp.call_tool.return_value = json.dumps(
+        {
+            "status": "ok",
+            "results": [
+                {
+                    "title": "Current news",
+                    "url": "https://example.com/news",
+                    "snippet": "A dated report.",
+                }
+            ],
+        }
+    )
 
     result = await source.gather_context("latest AI news", mcp=mcp)
 
@@ -85,3 +97,49 @@ async def test_web_source_prefers_single_mcp_retrieval(monkeypatch):
         {"query": "latest AI news", "max_results": 5},
     )
     assert "Current news" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What's the climate tomorrow?",
+        "What time is the F1 sprint race tomorrow?",
+        "Give me the top 10 AI news",
+    ],
+)
+async def test_web_source_recognizes_reported_live_queries(query):
+    assert await WebContextSource().can_handle(query) is True
+
+
+@pytest.mark.asyncio
+async def test_web_source_uses_weather_tool_for_tomorrow(monkeypatch):
+    source = WebContextSource()
+    monkeypatch.setattr(source, "_search", lambda _query: pytest.fail("web fallback used"))
+    mcp = AsyncMock()
+    mcp.call_tool.return_value = "Tomorrow's forecast for Dubai: clear, high 38°C."
+
+    result = await source.gather_context(
+        "What's the climate tomorrow?", mcp=mcp, weather_city="Dubai"
+    )
+
+    mcp.call_tool.assert_awaited_once_with(
+        "get_weather",
+        {"city_name": "Dubai", "day": "tomorrow"},
+    )
+    assert "Verified live weather" in result
+
+
+@pytest.mark.asyncio
+async def test_web_source_requests_ten_results_for_top_ten_news(monkeypatch):
+    source = WebContextSource()
+    monkeypatch.setattr(source, "_search", lambda _query: pytest.fail("direct fallback used"))
+    mcp = AsyncMock()
+    mcp.call_tool.return_value = "Result 1:\nTitle: AI news"
+
+    await source.gather_context("Give me the top 10 AI news", mcp=mcp)
+
+    mcp.call_tool.assert_awaited_once_with(
+        "web_search",
+        {"query": "Give me the top 10 AI news", "max_results": 10},
+    )

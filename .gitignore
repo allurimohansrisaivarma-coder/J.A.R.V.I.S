@@ -47,6 +47,10 @@ logs/
 credentials.json
 *_token.json
 token.json
+provider-keys.dat
+provider-keys.tmp
+repair-*.log
+build-repair*.log
 *.lock
 
 # Editor / IDE

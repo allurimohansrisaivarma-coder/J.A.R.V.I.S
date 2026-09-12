@@ -45,7 +45,19 @@ class GeminiProvider(LLMProvider):
         self.temperature = temperature
         self.max_output_tokens = max_output_tokens
         self.thinking_level = thinking_level
-        self.client = genai.Client(api_key=self.api_keys[self._current_key_idx])
+        self.client = self._create_client()
+
+    def _create_client(self):
+        return genai.Client(
+            api_key=self.api_keys[self._current_key_idx],
+            http_options=types.HttpOptions(
+                timeout=20000, retry_options=types.HttpRetryOptions(attempts=1)
+            ),
+        )
+
+    @property
+    def supports_images(self) -> bool:
+        return True
 
     @property
     def name(self) -> str:
@@ -90,9 +102,9 @@ class GeminiProvider(LLMProvider):
 
                             img_byte_arr = io.BytesIO()
                             # Resize if huge to save bandwidth (if not already resized)
-                            if item.width > 1920 or item.height > 1080:
-                                item.thumbnail((1920, 1080))
-                            item.save(img_byte_arr, format="JPEG", quality=80)
+                            img = item.convert("RGB")
+                            img.thumbnail((1920, 1200))
+                            img.save(img_byte_arr, format="JPEG", quality=85)
                             img_bytes = img_byte_arr.getvalue()
                             parts.append(
                                 types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")
@@ -140,12 +152,12 @@ class GeminiProvider(LLMProvider):
                 # 429 Too Many Requests, 503 Service Unavailable, 500 Internal Error
                 if e.code in (429, 503, 500):
                     # Key rotation logic
-                    if keys_attempted_this_request < len(self.api_keys):
+                    if e.code == 429 and keys_attempted_this_request < len(self.api_keys):
                         self._current_key_idx = (self._current_key_idx + 1) % len(self.api_keys)
                         logger.warning(
                             "gemini.rate_limit_rotating_key", key_idx=self._current_key_idx
                         )
-                        self.client = genai.Client(api_key=self.api_keys[self._current_key_idx])
+                        self.client = self._create_client()
                         keys_attempted_this_request += 1
                         continue  # Immediate retry with new key
 
@@ -228,7 +240,11 @@ class GeminiProvider(LLMProvider):
         )
 
         tool_calls = []
-        if response.candidates and response.candidates[0].content.parts:
+        if (
+            response.candidates
+            and response.candidates[0].content
+            and response.candidates[0].content.parts
+        ):
             for part in response.candidates[0].content.parts:
                 if part.function_call:
                     tool_calls.append(part.function_call)
@@ -236,7 +252,9 @@ class GeminiProvider(LLMProvider):
         text_parts = []
         if response.candidates and response.candidates[0].content:
             text_parts = [
-                part.text for part in response.candidates[0].content.parts or [] if part.text
+                part.text
+                for part in response.candidates[0].content.parts or []
+                if part.text and not part.thought
             ]
 
         return LLMResponse(
@@ -246,7 +264,7 @@ class GeminiProvider(LLMProvider):
             usage=usage,
             latency_ms=timer.latency_ms,
             finish_reason=str(response.candidates[0].finish_reason.name)
-            if response.candidates
+            if response.candidates and response.candidates[0].finish_reason
             else "stop",
             raw=response.model_dump(),
             tool_calls=tool_calls,
@@ -294,6 +312,7 @@ class GeminiProvider(LLMProvider):
         max_retries = max(3, len(self.api_keys) * 2)
         keys_attempted_this_request = 1
 
+        emitted = False
         for attempt in range(max_retries):
             try:
                 # Need to grab the current client in case it rotated
@@ -305,20 +324,26 @@ class GeminiProvider(LLMProvider):
                 async for chunk in stream:
                     if chunk.parts:
                         for p in chunk.parts:
-                            if p.text:
+                            if p.text and not p.thought:
+                                emitted = True
                                 yield p.text
                             elif p.function_call:
+                                emitted = True
                                 yield p
                 return  # Success, exit the retry loop
             except Exception as e:
                 if isinstance(e, errors.APIError) and e.code in (429, 503, 500):
-                    if keys_attempted_this_request < len(self.api_keys):
+                    if (
+                        not emitted
+                        and e.code == 429
+                        and keys_attempted_this_request < len(self.api_keys)
+                    ):
                         self._current_key_idx = (self._current_key_idx + 1) % len(self.api_keys)
                         logger.warning(
                             "gemini.rate_limit_rotating_key_in_stream",
                             key_idx=self._current_key_idx,
                         )
-                        self.client = genai.Client(api_key=self.api_keys[self._current_key_idx])
+                        self.client = self._create_client()
                         keys_attempted_this_request += 1
                         continue
                     logger.error("gemini.rate_limit_exhausted_stream", error=str(e))

@@ -1,6 +1,6 @@
 # J.A.R.V.I.S. — Desktop Intelligence Platform
 
-A Windows 10/11 desktop AI assistant with voice conversations, screen understanding, guarded local-file intelligence, local application launching, optional long-term memory, and an Iron Man-inspired HUD. Version **0.2.0** uses Groq for ordinary work and reserves Gemini for complex reasoning and vision so free-tier usage remains practical. Cloud availability and quotas still depend on your provider accounts.
+A Windows 10/11 desktop AI assistant with voice conversations, screen understanding, guarded local-file intelligence, local application launching, optional long-term memory, and an Iron Man-inspired HUD. Version **0.2.7** uses Groq for ordinary work and reserves Gemini for complex reasoning and vision so free-tier usage remains practical. Cloud availability and quotas still depend on your provider accounts.
 
 ---
 
@@ -12,7 +12,7 @@ A Windows 10/11 desktop AI assistant with voice conversations, screen understand
 | **Hold-to-Speak Voice** | Hold the mic button or **Spacebar** to speak. JARVIS listens, transcribes (Groq Whisper), responds via LLM, and speaks back (Edge TTS) |
 | **Widget Mode** | Collapse into a draggable floating core; use its small ↗ button to restore the full HUD without accidental expansion while dragging |
 | **Live TTS Pipeline** | 3-stage async pipeline (buffer → download → play) begins with a short natural phrase and shows each phrase as its audio starts |
-| **Screen Understanding** | Ask "what's on my screen?" and JARVIS captures + analyzes your display via Gemini Vision |
+| **Screen Understanding** | Ask "what's on my screen?" and JARVIS reads each display with Groq Qwen vision and Gemini fallback |
 | **File Access** | JARVIS can see and read files from your Desktop, Documents, and Downloads folders |
 | **Long-Term Memory** | Optional LanceDB vector store + SQLite metadata for persistent conversational memory, powered by local sentence-transformer embeddings and semantic query expansion |
 | **Google Calendar** | Read upcoming events and create new ones (requires OAuth setup — see below) |
@@ -61,12 +61,12 @@ PowerShell activation, if desired, is `..\.venv\Scripts\Activate.ps1` only when 
 
 ## Run the packaged Windows application
 
-JARVIS is distributed as a **one-folder application** because its AI, audio, screen-capture, and MCP dependencies must remain beside the executable.
+JARVIS is distributed as a **one-folder application** because its AI, audio, screen-capture, and tool dependencies must remain beside the executable.
 
-1. Download `JARVIS-Windows-x64-v0.2.0.zip` from the GitHub Release.
+1. Download `JARVIS-Windows-x64-v0.2.7.zip` from the GitHub Release.
 2. Extract the entire `JARVIS` folder. Do not copy `JARVIS.exe` out by itself.
-3. Rename `.env.example` to `.env` inside the extracted folder and add your Groq and Gemini keys.
-4. Double-click `JARVIS.exe`. A bundled executable opens the desktop UI automatically.
+3. Double-click `JARVIS.exe`. Open Settings and save your Groq and/or Gemini keys, then reopen the app. Keys entered here are encrypted for your Windows account. Existing `.env` configurations still work.
+4. Use SCREEN to read the visible desktop, hold the mic button to speak, and use STOP or Escape to interrupt a reply.
 
 The laptop needs 64-bit Windows 10/11, Microsoft Edge WebView2 Runtime, internet access for cloud features, and microphone permission for voice input. Google OAuth credentials remain optional and belong in `%APPDATA%\JARVIS\credentials.json`.
 
@@ -147,6 +147,8 @@ JARVIS uses an **intent-based model router** that classifies each query and rout
 | COMPLEX | Gemini `gemini-3.7-flash` (high thinking) | Explicit deep analysis, vision, and Gemini-native desktop tools |
 
 The default policy is **Groq-first**: both FAST and STANDARD requests use Groq, while Gemini is reserved for requests classified as COMPLEX or requiring Gemini-native vision/function calling. Gemini remains an availability fallback if Groq fails. Providers are never invoked twice during one fallback chain. Set `llm.default_provider: gemini` only if you intentionally want ordinary requests to use Gemini again.
+
+Live questions containing terms such as **tomorrow**, **weather/climate**, **F1/sprint**, **latest**, or **news** perform one bounded MCP retrieval before Groq summarizes the verified result. Short confirmations such as “yes, do that” retain the preceding live-data question. Dashboard phrases including “Global Dashboard,” “Global Tab,” “World Desk,” and CPU/RAM/system-stat requests open the World Monitor locally without an LLM call.
 
 ---
 
@@ -231,7 +233,7 @@ The UI is a frameless, always-on-top pywebview window styled as an Iron Man HUD:
 - **Central Core**: Animated holographic rings that change color based on state
 - **Chat Stream**: Scrollable message area with JARVIS and user messages
 - **Input Area**: Text input + Send button + Mic button (hold to speak)
-- **Widget Mode**: Click the collapse button to shrink to a small floating core. Drag anywhere on the core to move it and use the small **↗** button to restore the 1200×800 HUD.
+- **Widget Mode**: Click the collapse button or press **Ctrl+Alt+J** to switch between the HUD and a 112 px circular, always-on-top reactor. Click the reactor center to reopen JARVIS and drag the outer ring to move it. **Ctrl+Alt+D** toggles optional full click-through; **Ctrl+Alt+J** always restores the HUD. Windows clips the actual window to a circle, so its corners do not cover or intercept other apps. Each mode remembers its position.
 
 ### Core States
 
@@ -322,10 +324,12 @@ system:
 .\.venv\Scripts\python.exe build.py
 ```
 
+Use `build.py --package-only` to refresh the release ZIP and checksums from an already-built versioned `dist\JARVIS-0.2.7` folder. Both modes exclude `.env`, OAuth tokens, runtime logs/data, and personal `config\jarvis.yaml` from the archive.
+
 The release build produces:
 
-- `dist\JARVIS\JARVIS.exe` — the updated executable inside its required application folder
-- `dist\JARVIS-Windows-x64-v0.2.0.zip` — upload this to a GitHub Release
+- `dist\JARVIS-0.2.7\JARVIS.exe` — the updated executable inside its required application folder
+- `dist\JARVIS-Windows-x64-v0.2.7.zip` — upload this to a GitHub Release
 - `dist\SHA256SUMS.txt` — integrity hashes for the executable and ZIP
 
 `dist/`, user configuration, logs, tokens, and `.env` are intentionally ignored by Git. Push the source repository normally, then attach the generated ZIP and checksum file to the corresponding GitHub Release rather than committing the large binary bundle.
@@ -372,3 +376,47 @@ All dependencies are listed in `pyproject.toml`. Key packages:
 ## License
 
 This project is open-source and available under the [MIT License](LICENSE).
+
+## Reliability update 0.2.1
+
+The executable is in `dist/JARVIS-0.2.7/JARVIS.exe`; keep its `_internal` folder beside it. The release ZIP includes the full application. Builds now use a versioned output folder so rebuilding does not erase an older installation's configuration or logs.
+
+- Screenshots are kept out of conversation history and sent only to models that accept images. Displays are captured separately to preserve readable text. The HUD is excluded from capture when Windows supports it. Capture requires an unlocked, interactive Windows desktop; protected content may remain unavailable.
+- Screen requests use `qwen/qwen3.6-27b` on Groq first and Gemini as fallback. This is configurable with `llm.groq.vision_model`. Both require internet and an accepted provider key.
+- Bundled tools run inside the app, health checks run in the background, and network operations have deadlines. Browser tools support installed Chrome and Edge and recover from a closed tab.
+- Speech recognition failures are shown in the HUD. Windows speech is used when online speech synthesis fails. Text remains available if audio output fails.
+- Double-clicking an already running release focuses its window. If another program occupies the configured port, JARVIS selects an available one automatically.
+- Preferences, encrypted keys, and default logs are stored under `%LOCALAPPDATA%/JARVIS` in packaged builds. Optional memory has an explicit disabled state. Google services still require their separate OAuth setup.
+- For a diagnostic report, run `JARVIS.exe --diagnose report.json`. Add `--online` to test AI with a generated image containing a code; diagnostics never upload the desktop.
+
+Verified provider request formats: [Groq vision documentation](https://console.groq.com/docs/vision) and [Gemini 3.7 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash).
+
+## Arc reactor HUD 0.2.7
+
+The refreshed HUD uses local SVG artwork and state-driven animations. Compact mode pauses dashboard polling and keeps only the circular reactor visible. Reduced-motion preferences are respected.
+
+| Shortcut | Action anywhere on the desktop |
+|---|---|
+| Ctrl+Alt+J | Toggle floating reactor / full HUD |
+| Ctrl+Alt+D | Toggle optional full click-through |
+| Ctrl+Alt+R | Read the visible screen without switching focus |
+| Ctrl+Alt+X | Stop the current response |
+| Ctrl+Shift+J (hold) | Push to talk; customizable in Settings |
+
+If another app already owns a desktop shortcut, the HUD reports it; its buttons remain available. Screen reading requires an unlocked desktop and a configured AI provider.
+
+## Conversation and reliability update 0.2.7
+
+Conversation history is saved in a local SQLite archive and restored on restart, independently of optional pinned facts. Relevant earlier user statements are retrieved across conversations; newer corrections take priority. Explicit requests to remember facts are also retrieved when a later message does not share the same keywords. Generated assistant claims are not indexed as user facts. Settings includes a clear-history control.
+
+Speech retries the same selected voice up to four times and freezes voice settings for each reply. Formatting-only chunks are skipped, isolated synthesis failures do not suppress later phrases, and longer replies use fewer natural chunks. Raw URLs, Markdown link destinations, and citation markers are omitted from speech while their links remain visible in chat. An unavailable speech service produces a visible notice and a text response, without substituting the default Windows voice.
+
+Web retrieval includes dated search evidence, readable public-page excerpts, and clickable source citations. Missing evidence stops live-answer generation; snippets are marked provisional. Model answers can still be mistaken, so use the cited pages to check important claims.
+
+## Daily debrief accuracy
+
+Daily, morning, evening, and news briefings retrieve topic-specific publisher RSS feeds on each request, including spoken variants such as "daily de brief." Direct publishers are preferred, with a fixed Google News RSS query used only when a topic feed has too few fresh items. The debrief displays literal linked headlines with publication timestamps, accepts only the preceding 24 hours, and omits stale, future, undated, or unavailable items. It never asks the language model to invent a news summary, standings, scores, or schedules. Missing categories are reported as unavailable rather than padded to reach a requested count.
+
+PDF text can be extracted from approved Desktop, Documents, and Downloads folders when explicitly requested. PDF size and page counts are bounded, encrypted files remain locked, and local paths stay visible in chat without being read aloud.
+
+Default topics are cricket, Formula One, AI, software engineering, and world news. Specifying topics limits the briefing to those categories. A separate personal-memory question is answered separately using user statements, without sending those statements to news feeds. Earlier generated assistant answers are excluded from live-web context.

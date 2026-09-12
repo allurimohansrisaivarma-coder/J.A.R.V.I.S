@@ -1,6 +1,6 @@
 """Tests for LLM provider base classes and data models."""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from google.genai import types
@@ -278,6 +278,50 @@ class TestGroqProviderMessageConversion:
         assert formatted[0] == {"role": "system", "content": "Be helpful"}
         assert formatted[1]["role"] == "system"
         assert formatted[2] == {"role": "user", "content": "Hello"}
+
+    def test_tool_capability_lines_are_removed_for_groq(self):
+        from jarvis.llm.groq_provider import GroqProvider
+
+        provider = GroqProvider.__new__(GroqProvider)
+        formatted = provider._convert_messages(
+            [
+                Message.system(
+                    "Keep this instruction.\n"
+                    "Use the `get_weather` tool now.\n"
+                    "Use the `launch_application` tool."
+                ),
+                Message.user("Weather tomorrow?"),
+            ]
+        )
+
+        combined_system = "\n".join(
+            message["content"] for message in formatted if message["role"] == "system"
+        )
+        assert "Keep this instruction" in combined_system
+        assert "`get_weather`" not in combined_system
+        assert "`launch_application`" not in combined_system
+
+    @pytest.mark.asyncio
+    async def test_stream_retries_forbidden_internal_tool_call(self):
+        from jarvis.llm.groq_provider import GroqProvider
+
+        async def rejected_stream():
+            raise RuntimeError("Tool choice is none, but model called a tool")
+            yield
+
+        async def text_stream():
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta.content = "Live answer"
+            yield chunk
+
+        provider = GroqProvider(api_key="test")
+        provider._execute_with_retry = AsyncMock(side_effect=[rejected_stream(), text_stream()])
+
+        chunks = [chunk async for chunk in provider.stream([Message.user("Current news")])]
+
+        assert chunks == ["Live answer"]
+        assert provider._execute_with_retry.await_count == 2
 
 
 @pytest.mark.integration

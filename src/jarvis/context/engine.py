@@ -52,10 +52,21 @@ class ContextEngine:
         if not active_sources:
             return "", []
 
+        if any(isinstance(source, ScreenContextSource) for source in active_sources) and not any(
+            term in query.lower() for term in ("search the web", "look up online")
+        ):
+            active_sources = [s for s in active_sources if not isinstance(s, WebContextSource)]
+
         logger.debug("Active context sources", sources=[s.name for s in active_sources])
 
         # 2. Gather context concurrently
-        tasks = [source.gather_context(query, **kwargs) for source in active_sources]
+        tasks = [
+            asyncio.wait_for(
+                source.gather_context(query, **kwargs),
+                timeout=18.0 if isinstance(source, WebContextSource) else 8.0,
+            )
+            for source in active_sources
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # 3. Format output
@@ -65,6 +76,7 @@ class ContextEngine:
         for source, result in zip(active_sources, results):
             if isinstance(result, Exception):
                 logger.error("Source failed during gather", source=source.name, error=str(result))
+                context_blocks.append(f"{source.name} is unavailable. Do not invent its results.")
                 continue
 
             if isinstance(result, tuple):

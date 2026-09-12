@@ -87,9 +87,12 @@ def setup_logging(settings: LoggingSettings) -> None:
     # Configure root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(stdlib_level)
-    root_logger.handlers.clear()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+        handler.close()
     root_logger.addHandler(file_handler)
-    root_logger.addHandler(console_handler)
+    if sys.stdout is not None:
+        root_logger.addHandler(console_handler)
 
     # Configure structlog
     structlog.configure(

@@ -9,6 +9,7 @@ Usage:
 import argparse
 import asyncio
 import sys
+import traceback
 from pathlib import Path
 from typing import Any, cast
 
@@ -22,7 +23,6 @@ if (
     cast(Any, sys.stdout).reconfigure(encoding="utf-8")
 
 from jarvis import __version__
-from jarvis.core.session import SessionManager
 
 
 # ANSI color codes
@@ -86,8 +86,39 @@ def print_help() -> None:
 """)
 
 
+def _report_ui_startup_error(error: BaseException) -> None:
+    """Persist frozen UI failures and show an actionable Windows error."""
+    detail = "".join(traceback.format_exception(error)).strip()
+    message = f"JARVIS failed to start:\n\n{error!s}"
+
+    if getattr(sys, "frozen", False):
+        try:
+            from jarvis.config.settings import USER_DIR
+
+            log_dir = USER_DIR / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / "startup-error.log").write_text(detail + "\n", encoding="utf-8")
+            message += f"\n\nDetails: {log_dir / 'startup-error.log'}"
+        except Exception as report_error:
+            if sys.stderr is not None:
+                print(f"Unable to write JARVIS startup log: {report_error}", file=sys.stderr)
+
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(0, message, "JARVIS Error", 0x10)
+        except Exception as dialog_error:
+            if sys.stderr is not None:
+                print(f"Unable to show JARVIS error dialog: {dialog_error}", file=sys.stderr)
+        return
+
+    print(f"\n{C.RED}UI failed: {error}{C.RESET}")
+
+
 async def async_main(args) -> int:
     """Async entry point for the Jarvis CLI."""
+    from jarvis.core.session import SessionManager
+
     session = SessionManager(config_path=args.config)
 
     try:
@@ -264,8 +295,18 @@ def main() -> None:
     parser.add_argument("--voice", action="store_true", help="Start in voice mode")
     parser.add_argument("--ui", action="store_true", help="Launch the desktop UI")
     parser.add_argument("--mcp-server", help=argparse.SUPPRESS)
+    parser.add_argument("--diagnose", type=Path, help="Write a JSON diagnostic report and exit")
+    parser.add_argument("--smoke-test", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--online", action="store_true", help="Include synthetic AI checks in diagnostics"
+    )
 
     args = parser.parse_args()
+
+    if args.diagnose:
+        from jarvis.diagnostics import diagnose
+
+        sys.exit(asyncio.run(diagnose(args.diagnose, online=args.online)))
 
     if args.mcp_server:
         server_modules = {
@@ -284,8 +325,6 @@ def main() -> None:
         return
 
     # If running as a bundled executable (double-clicked), default to UI mode
-    import sys
-
     if getattr(sys, "frozen", False) and not any(
         arg in sys.argv for arg in ["--ui", "--voice", "--version", "--help", "-h"]
     ):
@@ -295,31 +334,35 @@ def main() -> None:
         print(f"Jarvis v{__version__}")
         sys.exit(0)
 
-    if args.ui:
+    if args.ui or args.smoke_test:
+        instance = None
+        if getattr(sys, "frozen", False) and not args.smoke_test:
+            from jarvis.ui.instance import SingleInstance
+
+            instance = SingleInstance()
+            if instance.already_running:
+                instance.focus_existing()
+                instance.close()
+                return
+        from jarvis.core.session import SessionManager
+
         session = SessionManager(config_path=args.config)
         exit_code = 0
         try:
             from jarvis.ui.app import launch_ui
 
-            launch_ui(session)
-        except ImportError as e:
-            exit_code = 1
-            print(
-                f"\n{C.RED}UI dependencies missing. Install: pip install pywebview websockets{C.RESET}"
-            )
-            print(f"{C.DIM}Error: {e}{C.RESET}")
+            launch_ui(session, smoke_report=args.smoke_test)
         except Exception as e:
             exit_code = 1
-            print(f"\n{C.RED}UI failed: {e}{C.RESET}")
-            if getattr(sys, "frozen", False):
-                import ctypes
-
-                ctypes.windll.user32.MessageBoxW(
-                    0,
-                    f"JARVIS failed to start:\n\n{e!s}\n\nCheck your API keys and logs.",
-                    "JARVIS Error",
-                    0x10,
-                )
+            if args.smoke_test:
+                # Automated packaged checks must fail without a blocking Windows dialog.
+                if sys.stderr is not None:
+                    print(f"Native UI smoke test failed: {e}", file=sys.stderr)
+            else:
+                _report_ui_startup_error(e)
+        finally:
+            if instance:
+                instance.close()
         print(f"\n{C.DIM}Goodbye.{C.RESET}")
         sys.exit(exit_code)
     else:

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from jarvis.utils.errors import user_error
 from jarvis.utils.metrics import metrics
 from jarvis.voice.capture import AudioCapture
 from jarvis.voice.stt import STTProvider
@@ -60,6 +61,12 @@ class VoiceManager:
         self.on_jarvis_chunk: Callable[[Any], object] | None = None
         self.on_jarvis_done: Callable[[], object] | None = None
         self.on_audio_level: Callable[[float], object] | None = None
+        self.on_error: Callable[[str], object] | None = None
+        self.tts.on_unavailable = self._notify_error
+
+    def _notify_error(self, message: str) -> None:
+        if self.on_error:
+            self.on_error(message)
 
     def _set_state(self, new_state: VoiceState):
         """Update state and notify observers."""
@@ -115,6 +122,7 @@ class VoiceManager:
         import time
 
         async with self._response_lock:
+            self._active_speak_task = asyncio.current_task()
             self._set_state(VoiceState.THINKING)
             self._ttfa_recorded = False
             started_at = time.perf_counter()
@@ -182,6 +190,10 @@ class VoiceManager:
                     )
 
                     if not audio_path or not self._is_running:
+                        if self._is_running:
+                            self._notify_error(
+                                "No microphone audio captured. Check the input device and microphone permissions."
+                            )
                         self._set_state(VoiceState.IDLE)
                         continue
 
@@ -189,7 +201,16 @@ class VoiceManager:
                     self._set_state(VoiceState.THINKING)
                     metrics.start_request("voice")
                     stt_start = time.perf_counter()
-                    text = await self.stt.transcribe(audio_path)
+                    try:
+                        text = await self.stt.transcribe(audio_path)
+                    except Exception as exc:
+                        self._notify_error(user_error(exc, operation="speech recognition"))
+                        metrics.end_request(status="stt_failed")
+                        self._set_state(VoiceState.IDLE)
+                        continue
+                    finally:
+                        with suppress(OSError):
+                            audio_path.unlink()
                     metrics.record_stage("stt", time.perf_counter() - stt_start)
 
                     try:
@@ -198,6 +219,9 @@ class VoiceManager:
                         logger.debug("Could not delete captured audio", error=str(exc))
 
                     if not text:
+                        self._notify_error(
+                            "No speech detected. Hold the mic button while speaking, then release it."
+                        )
                         metrics.end_request(status="empty_transcript")
                         self._set_state(VoiceState.IDLE)
                         continue
@@ -239,7 +263,10 @@ class VoiceManager:
                         if not pending_task.done():
                             pending_task.cancel()
                         with suppress(asyncio.CancelledError):
-                            await pending_task
+                            try:
+                                await pending_task
+                            except Exception as exc:
+                                self._notify_error(user_error(exc))
 
                     if self.state == VoiceState.SPEAKING:
                         self._set_state(VoiceState.IDLE)
@@ -248,6 +275,7 @@ class VoiceManager:
             logger.info("PTT loop cancelled")
         except Exception as e:
             logger.error("Error in PTT loop", error=str(e))
+            self._notify_error(user_error(e, operation="voice input"))
         finally:
             if self._task is asyncio.current_task():
                 self._is_running = False
@@ -261,3 +289,16 @@ class VoiceManager:
             self._active_speak_task.cancel()
         if self._task and not self._task.done():
             self._task.cancel()
+
+    async def cancel_turn(self) -> None:
+        """Cancel capture/transcription/playback and re-arm the global hotkey."""
+        task = self._task
+        response_task = self._active_speak_task
+        self.stop()
+        pending = [t for t in (task, response_task) if t and t is not asyncio.current_task()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        while not self.hotkey_queue.empty():
+            self.hotkey_queue.get_nowait()
+        self._set_state(VoiceState.IDLE)
+        asyncio.create_task(self.start_ptt_loop())

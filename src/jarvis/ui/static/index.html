@@ -4,22 +4,25 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>J.A.R.V.I.S. HUD</title>
-    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="hud.css">
 </head>
 <body>
     <div class="hud-container">
         <!-- Top Tech Details -->
-        <div class="hud-top-bar">
-            <div class="hud-sys-status">SYS.ONLINE // MEM.OK // VAD.ACTV</div>
+        <div class="hud-top-bar pywebview-drag-region">
+            <div class="brand-lockup"><span class="brand-mark" aria-hidden="true">◎</span><div><div class="brand-title">J.A.R.V.I.S. <small style="font-size:9px;letter-spacing:1px">v0.2.7</small></div><div class="hud-sys-status">JARVIS // CONNECTING</div></div></div>
+            <span class="header-caption">PERSONAL INTELLIGENCE INTERFACE</span>
             <div class="hud-controls">
+                <button id="screen-btn" class="hud-icon-btn" title="Read my screen · Ctrl+Alt+R" aria-label="Read my screen">◉ &nbsp; SCREEN</button>
+                <button id="stop-btn" class="hud-icon-btn" title="Stop reply · Escape / Ctrl+Alt+X" aria-label="Stop reply">■ &nbsp; STOP</button>
                 <button id="settings-btn" class="hud-icon-btn" title="Settings">
                     <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="3"></circle>
                         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
                     </svg>
                 </button>
-                <button id="minimize-btn" class="hud-icon-btn" title="Collapse to Widget">
+                <button id="minimize-btn" class="hud-icon-btn" title="Floating reactor · Ctrl+Alt+J" aria-label="Toggle floating reactor">
                     <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="4 14 10 14 10 20"></polyline>
                         <polyline points="20 10 14 10 14 4"></polyline>
@@ -44,17 +47,18 @@
         <div class="dashboard-grid">
             <!-- Left Panel (Chat) -->
             <div class="panel left-panel">
+                <div class="section-heading"><span>01 / COMMUNICATION</span><span class="section-dot" aria-hidden="true"></span></div>
                 <!-- Chat Stream -->
                 <main id="chat-container" class="hud-chat-stream">
                     <div class="hud-message system">
-                        <span class="hud-msg-prefix">></span> SYSTEM INITIALIZED. WELCOME, SIR.
+                        <span class="welcome-label">AT YOUR SERVICE</span><h2>Welcome back, sir.</h2><p>What are we working on today?</p><span class="welcome-hint">Speak a command, ask a question, or let me read your screen.</span>
                     </div>
                 </main>
 
                 <footer class="hud-input-area">
                     <div class="hud-input-box">
                         <span class="hud-prompt">></span>
-                        <textarea id="message-input" placeholder="INPUT COMMAND..." rows="1"></textarea>
+                        <textarea id="message-input" placeholder="Ask JARVIS anything…" aria-label="Message JARVIS" rows="1"></textarea>
                         <button id="mic-btn" class="hud-icon-btn mic" title="Hold to Speak (or hold Spacebar)">
                             <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
@@ -70,38 +74,51 @@
                             </svg>
                         </button>
                     </div>
+                    <div class="input-hint">ENTER TO SEND <span>HOLD MIC TO SPEAK</span></div>
                 </footer>
             </div>
 
             <!-- Center Panel -->
             <div class="panel center-panel">
+                <div class="reactor-heading"><div class="eyebrow">DESKTOP INTELLIGENCE</div><h1>J.A.R.V.I.S.</h1><p>Just a rather very intelligent system.</p></div>
                 <div class="ai-core-container">
-                    <button id="widget-expand-btn" class="widget-expand-btn" title="Restore JARVIS" aria-label="Restore JARVIS">↗</button>
+                    <div class="widget-drag-surface pywebview-drag-region" title="Drag to move · Ctrl+Alt+J to restore"></div>
+                    <button id="widget-expand-btn" class="widget-expand-btn" title="Restore JARVIS · Ctrl+Alt+J" aria-label="Restore JARVIS"></button>
+                    <button id="widget-mic-btn" class="widget-mic-btn" title="Hold to speak" aria-label="Hold to speak">◉</button>
                     <div id="ai-core" class="ai-core IDLE">
-                        <svg class="core-svg" viewBox="0 0 100 100">
+                        <svg class="core-svg" viewBox="0 0 100 100" aria-hidden="true">
+                            <defs><radialGradient id="reactor-light"><stop offset="0" stop-color="#f2ffff"/><stop offset=".45" stop-color="#6ff5ff"/><stop offset="1" stop-color="#08a9d4" stop-opacity=".1"/></radialGradient></defs>
+                            <circle class="reactor-track" cx="50" cy="50" r="49"/>
+                            <circle class="reactor-ticks" cx="50" cy="50" r="48" stroke-dasharray=".4 2.1"/>
                             <circle class="svg-ring outer" cx="50" cy="50" r="46" stroke-dasharray="60 10" />
                             <circle class="svg-ring outer-reverse" cx="50" cy="50" r="42" stroke-dasharray="30 5" />
                             <circle class="svg-ring middle" cx="50" cy="50" r="32" stroke-dasharray="4 8" />
                             <circle class="svg-ring inner" cx="50" cy="50" r="22" stroke-dasharray="80 20" />
-                            <circle class="svg-center" cx="50" cy="50" r="8" />
+                            <circle class="reactor-track" cx="50" cy="50" r="37"/>
+                            <circle class="reactor-fins" cx="50" cy="50" r="27" stroke-dasharray="9 5.14"/>
+                            <circle class="reactor-halo" cx="50" cy="50" r="17"/>
+                            <circle class="svg-center" cx="50" cy="50" r="12" />
+                            <path class="reactor-triangle" d="M50 39 L60 56 L40 56 Z"/>
                             <line x1="50" y1="2" x2="50" y2="8" class="svg-crosshair" />
                             <line x1="50" y1="92" x2="50" y2="98" class="svg-crosshair" />
                             <line x1="2" y1="50" x2="8" y2="50" class="svg-crosshair" />
                             <line x1="92" y1="50" x2="98" y2="50" class="svg-crosshair" />
                         </svg>
                     </div>
-                    <div id="core-status-text" class="core-status-text">STANDBY</div>
+                    <div class="core-state"><span class="state-light"></span><div id="core-status-text" class="core-status-text" role="status" aria-live="polite">STANDBY</div></div>
                 </div>
+                <div class="reactor-footer"><div class="signal-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span>READY WHEN YOU ARE</span></div>
+                <div class="shortcut-card"><div class="eyebrow">ALWAYS WITH YOU</div><div><span>Floating reactor</span><kbd>CTRL ALT J</kbd></div><div><span>Toggle click-through</span><kbd>CTRL ALT D</kbd></div><div><span>Read the screen</span><kbd>CTRL ALT R</kbd></div><div><span>Stop response</span><kbd>CTRL ALT X</kbd></div><div><span>Hold to speak</span><kbd id="voice-shortcut-label">CTRL SHIFT J</kbd></div><p id="shortcut-status" role="status">Desktop shortcuts connect when JARVIS opens.</p></div>
             </div>
 
             <!-- Right Panel -->
             <div class="panel right-panel">
                 <div class="terminal-header">
-                    <span class="terminal-title">BACKGROUND EXECUTOR // LOGS</span>
+                    <span class="terminal-title">02 / ACTIVITY FEED</span>
                     <span class="terminal-blink">_</span>
                 </div>
                 <main id="terminal-container" class="terminal-log-stream">
-                    <div class="terminal-line">[INFO] Subsystem routing established.</div>
+                    <div class="terminal-line">Ready for your next command.</div>
                 </main>
 
                 <!-- SYSTEM STATS & MEMORY (Bottom of Right Panel) -->
@@ -119,7 +136,7 @@
 
                     <div class="memory-dashboard-section">
                         <div class="memory-header-row">
-                            <span class="terminal-title">LONG-TERM MEMORY</span>
+                            <span class="terminal-title">03 / MEMORY</span>
                             <select id="memory-filter" class="hud-select">
                                 <option value="all">All Time</option>
                                 <option value="24h">Last 24 Hours</option>
@@ -182,26 +199,36 @@
                 </div>
                 <div class="modal-body">
                     <div class="form-group">
-                        <label for="setting-hotkey">GLOBAL OVERRIDE KEY</label>
+                        <label for="groq-key">GROQ API KEY — CHAT, VOICE AND SCREEN FALLBACK</label>
+                        <input type="password" id="groq-key" autocomplete="off" placeholder="Leave blank to keep current key">
+                    </div>
+                    <div class="form-group">
+                        <label for="gemini-key">GEMINI API KEY — SCREEN AND COMPLEX REQUESTS</label>
+                        <input type="password" id="gemini-key" autocomplete="off" placeholder="Leave blank to keep current key">
+                    </div>
+                    <button id="save-keys-btn" class="hud-primary-btn">SAVE API KEYS</button>
+                    <p id="settings-feedback" role="status" aria-live="polite"></p>
+                    <div class="form-group">
+                        <label for="setting-hotkey">HOLD-TO-SPEAK SHORTCUT</label>
                         <input type="text" id="setting-hotkey" value="ctrl+shift+j">
                     </div>
                     <div class="form-group">
-                        <label for="setting-silence">VAD CUTOFF SENSOR (SEC)</label>
+                        <label for="setting-silence">SILENCE DETECTION (SECONDS)</label>
                         <input type="number" id="setting-silence" step="0.1" value="0.5">
                     </div>
                     <div class="form-group">
-                        <label for="setting-voice">TTS VOCAL TRACT</label>
+                        <label for="setting-voice">VOICE</label>
                         <input type="text" id="setting-voice" value="en-GB-RyanNeural">
                     </div>
                     <div class="form-group">
-                        <label for="setting-rate">SPEECH VELOCITY</label>
+                        <label for="setting-rate">SPEAKING SPEED</label>
                         <input type="text" id="setting-rate" value="+20%" pattern="[+-][0-9]+%">
                     </div>
                     <div class="form-group">
                         <label for="setting-weather-city">LOCAL WEATHER CITY (AUTO-DETECT IF BLANK)</label>
                         <input type="text" id="setting-weather-city" placeholder="e.g. Dubai">
                     </div>
-                    <button id="save-settings-btn" class="hud-primary-btn">INITIALIZE OVERRIDE</button>
+                    <p class="history-note">Chats are saved locally and restored when JARVIS opens. Relevant earlier messages are recalled automatically.</p><button id="clear-history-btn" class="hud-primary-btn">CLEAR SAVED CONVERSATIONS</button><button id="save-settings-btn" class="hud-primary-btn">SAVE PREFERENCES</button>
                 </div>
             </div>
         </div>

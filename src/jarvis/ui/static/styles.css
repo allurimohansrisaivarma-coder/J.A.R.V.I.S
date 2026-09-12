@@ -63,6 +63,15 @@ body, html {
     -webkit-app-region: no-drag; /* Keep buttons clickable */
 }
 
+#screen-btn, #stop-btn { width: auto; padding: 0 9px; font-size: 11px; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+.hud-modal { max-height: 90vh; overflow-y: auto; }
+#settings-feedback { color: var(--core-cyan); font-size: 13px; line-height: 1.5; }
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
 .hud-icon-btn {
     background: rgba(0, 229, 255, 0.05);
     border: 1px solid rgba(0, 229, 255, 0.2);
@@ -660,125 +669,6 @@ body, html {
     color: #000;
     box-shadow: 0 0 20px var(--core-cyan-glow);
     text-shadow: none;
-}
-
-/* WIDGET MODE (Floating Transparent Rectangle) */
-body.widget-mode {
-    border-radius: 6px;
-    overflow: hidden;
-    background: transparent !important;
-}
-
-body.widget-mode .hud-container {
-    padding: 0;
-    border: 1px solid rgba(0, 229, 255, 0.3) !important;
-    box-shadow: inset 0 0 10px rgba(0, 229, 255, 0.1), 0 0 20px rgba(0, 0, 0, 0.8) !important;
-    background: rgba(0, 2, 5, 0.95) !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-    align-items: center;
-    justify-content: center;
-    border-radius: 6px;
-}
-
-body.widget-mode .hud-top-bar,
-body.widget-mode .hud-chat-stream,
-body.widget-mode .hud-input-area,
-body.widget-mode .left-panel,
-body.widget-mode .right-panel,
-body.widget-mode .world-monitor-container,
-body.widget-mode .core-status-text {
-    display: none !important;
-}
-
-body.widget-mode .dashboard-grid {
-    display: flex;
-    margin: 0;
-    padding: 0;
-    border: none;
-    box-shadow: none;
-    width: 100vw;
-    height: 100vh;
-    overflow: hidden !important;
-}
-
-body.widget-mode .center-panel {
-    border: none;
-    background: transparent;
-    overflow: hidden !important;
-    padding: 0;
-    width: 100%;
-    height: 100%;
-    flex: 1 1 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-body.widget-mode .center-panel::before {
-    display: none;
-}
-
-body.widget-mode .ai-core-container {
-    background: transparent;
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    margin: 0;
-    width: 100%;
-    height: 100%;
-    background: transparent;
-    border: none;
-    box-shadow: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: move;
-    -webkit-app-region: drag; /* NATIVE OS DRAG HANDLE IN WIDGET MODE */
-    transition: all 0.3s ease;
-}
-
-body.widget-mode .ai-core-container:hover {
-    transform: translate(-50%, -50%) scale(1.05);
-    filter: drop-shadow(0 0 10px rgba(0, 229, 255, 0.4));
-}
-
-body.widget-mode .ai-core {
-    width: 76px;
-    height: 76px;
-    margin: 0;
-    pointer-events: none;
-    -webkit-app-region: drag;
-}
-
-.widget-expand-btn {
-    display: none;
-}
-
-body.widget-mode .widget-expand-btn {
-    display: flex;
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    z-index: 10;
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid rgba(0, 229, 255, 0.55);
-    border-radius: 4px;
-    background: rgba(0, 12, 20, 0.9);
-    color: var(--core-cyan);
-    cursor: pointer;
-    font: 700 15px/1 monospace;
-    -webkit-app-region: no-drag;
-}
-
-body.widget-mode .widget-expand-btn:hover {
-    background: rgba(0, 229, 255, 0.22);
-    box-shadow: 0 0 8px var(--core-cyan-glow);
 }
 
 /* DASHBOARD STATS & MEMORY */

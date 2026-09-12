@@ -1,6 +1,7 @@
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 import structlog
 
@@ -61,29 +62,64 @@ class Conversation:
         result = []
         result.extend(system_msgs)
 
-        current_tokens = sum(len(str(m.content)) // 4 for m in system_msgs)
+        current_tokens = sum((len(str(m.content)) + 3) // 4 for m in system_msgs)
 
         recent: list[Message] = []
         for msg in reversed(other_msgs):
-            msg_tokens = len(str(msg.content)) // 4
+            msg_tokens = (len(str(msg.content)) + 3) // 4
             if current_tokens + msg_tokens <= max_tokens:
                 recent.insert(0, msg)
                 current_tokens += msg_tokens
             else:
+                if not recent and isinstance(msg.content, str):
+                    available = max(0, (max_tokens - current_tokens) * 4)
+                    marker = "\n[Long message truncated to fit context]\n"
+                    if available > len(marker):
+                        keep = (available - len(marker)) // 2
+                        recent.append(
+                            Message(
+                                msg.role,
+                                msg.content[:keep] + marker + msg.content[-keep:],
+                                msg.name,
+                            )
+                        )
                 break
 
         result.extend(recent)
-        return result
+        # Request-only context (especially screenshots) must never mutate history.
+        return [
+            Message(m.role, list(m.content) if isinstance(m.content, list) else m.content, m.name)
+            for m in result
+        ]
 
 
 class ConversationManager:
     """Manages active conversation and history."""
 
-    def __init__(self, system_prompt: str | None = None):
+    def __init__(
+        self,
+        system_prompt: str | None = None,
+        storage_path: Path | None = None,
+        transcript: Path | None = None,
+    ):
         """Initialize the conversation manager."""
         self._conversations: dict[str, Conversation] = {}
         self._active_id: str | None = None
         self._system_prompt: str = system_prompt or DEFAULT_SYSTEM_PROMPT
+        self._archive = None
+        if storage_path is not None:
+            from jarvis.core.history import ConversationArchive
+
+            self._archive = ConversationArchive(storage_path, transcript)
+            saved = self._archive.latest()
+            if saved:
+                identifier, rows = saved
+                conv = Conversation(id=identifier)
+                conv.add_message(Message.system(self._system_prompt))
+                for role, text in rows:
+                    conv.add_message(Message(role, text))
+                self._conversations[conv.id] = conv
+                self._active_id = conv.id
         logger.debug("ConversationManager initialized")
 
     def new_conversation(self) -> Conversation:
@@ -93,6 +129,8 @@ class ConversationManager:
             conv.add_message(Message.system(self._system_prompt))
         self._conversations[conv.id] = conv
         self._active_id = conv.id
+        if self._archive:
+            self._archive.new_session(conv.id)
         logger.info("New conversation created", conv_id=conv.id)
         return conv
 
@@ -110,6 +148,8 @@ class ConversationManager:
 
         msg = Message.user(text)
         conv.add_message(msg)
+        if self._archive:
+            self._archive.append(conv.id, "user", text)
         logger.debug("Added user message", conv_id=conv.id, length=len(text))
         return msg
 
@@ -121,6 +161,8 @@ class ConversationManager:
 
         msg = Message.assistant(text)
         conv.add_message(msg)
+        if self._archive:
+            self._archive.append(conv.id, "assistant", text)
         logger.debug("Added assistant message", conv_id=conv.id, length=len(text))
         return msg
 
@@ -129,7 +171,21 @@ class ConversationManager:
         conv = self.get_active()
         if not conv:
             return []
-        return conv.to_llm_messages(max_tokens=max_tokens)
+        reserve = min(2200, max_tokens // 4) if self._archive else 0
+        messages = conv.to_llm_messages(max_tokens=max_tokens - reserve)
+        if self._archive and conv.user_messages:
+            visible = {str(m.content) for m in messages}
+            recalled = self._archive.recall(str(conv.user_messages[-1].content), visible)
+            if recalled:
+                messages.insert(1, Message.system(recalled[: reserve * 4]))
+        return messages
+
+    def clear_history(self) -> None:
+        if self._archive:
+            self._archive.clear()
+        self._conversations.clear()
+        self._active_id = None
+        self.new_conversation()
 
     def end_conversation(self) -> None:
         """Mark current conversation as ended, clear active."""

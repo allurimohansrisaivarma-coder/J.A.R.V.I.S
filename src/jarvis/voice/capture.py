@@ -6,11 +6,11 @@ import inspect
 import os
 import sys
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 
 import numpy as np
-import onnxruntime as ort
 import sounddevice as sd
 import soundfile as sf
 import structlog
@@ -28,6 +28,8 @@ class SileroVAD:
 
     def __init__(self):
         """Initialize the VAD model. Downloads it if missing."""
+        import onnxruntime as ort
+
         self._ensure_model_exists()
 
         # Suppress onnxruntime warnings
@@ -80,7 +82,14 @@ class AudioCapture:
         """
         self.sample_rate = sample_rate
         self.chunk_size = chunk_size
-        self.vad = SileroVAD()
+        self._vad: SileroVAD | None = None
+
+    @property
+    def vad(self) -> SileroVAD:
+        # Push-to-talk never uses VAD; do not load an ONNX session on its first press.
+        if self._vad is None:
+            self._vad = SileroVAD()
+        return self._vad
 
     async def listen_for_speech(
         self, silence_duration: float = 1.5, on_recording_start=None, on_audio_level=None
@@ -270,6 +279,7 @@ class AudioCapture:
                 loop.call_soon_threadsafe(notify_level)
 
         logger.info("PTT recording started")
+        started_at = time.monotonic()
 
         try:
             with sd.InputStream(
@@ -280,6 +290,8 @@ class AudioCapture:
                 callback=audio_callback,
             ):
                 while True:
+                    if time.monotonic() - started_at >= 60:
+                        break
                     # Check for stop event (non-blocking)
                     try:
                         event = event_queue.get_nowait()
@@ -298,7 +310,7 @@ class AudioCapture:
 
         except asyncio.CancelledError:
             logger.info("PTT recording cancelled")
-            return None
+            raise
         except Exception as e:
             logger.error("Error during PTT recording", error=str(e))
             return None

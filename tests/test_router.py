@@ -138,6 +138,45 @@ class TestRouting:
         with pytest.raises(LLMError, match="All providers failed"):
             await full_router.generate_with_fallback(messages)
 
+    @pytest.mark.asyncio
+    async def test_empty_generate_response_falls_back(self, full_router: ModelRouter):
+        empty = LLMResponse(
+            content="",
+            model="empty-model",
+            provider="groq-standard",
+            usage=TokenUsage(),
+            latency_ms=1,
+        )
+        full_router.providers[ModelTier.STANDARD].generate = AsyncMock(return_value=empty)
+
+        response = await full_router.generate_with_fallback(
+            [Message.user("Give me current news")], target_tier=ModelTier.STANDARD
+        )
+
+        assert response.content
+        assert response.provider == "gemini-pro"
+
+    @pytest.mark.asyncio
+    async def test_empty_stream_falls_back(self, full_router: ModelRouter):
+        async def empty_stream(*_args, **_kwargs):
+            if False:
+                yield ""
+
+        async def fallback_stream(*_args, **_kwargs):
+            yield "Fallback response"
+
+        full_router.providers[ModelTier.STANDARD].stream = empty_stream
+        full_router.providers[ModelTier.COMPLEX].stream = fallback_stream
+
+        chunks = [
+            chunk
+            async for chunk in full_router.route_stream(
+                [Message.user("Give me current news")], target_tier=ModelTier.STANDARD
+            )
+        ]
+
+        assert "Fallback response" in chunks
+
 
 class TestProviderHealth:
     """Test provider health tracking."""

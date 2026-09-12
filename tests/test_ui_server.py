@@ -1,10 +1,15 @@
 """Focused tests for dashboard data refresh behavior."""
 
+import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+import websockets
 
+from jarvis.config.settings import Settings
+from jarvis.core.conversation import ConversationManager
 from jarvis.tools.calendar_tool import GoogleCalendarTool
 from jarvis.ui.server import WebSocketServer
 
@@ -70,3 +75,42 @@ async def test_calendar_dashboard_check_is_non_interactive(monkeypatch):
 
     assert interactive_values == [False]
     assert "not connected" in server.cached_world_data["schedule"]
+
+
+@pytest.mark.asyncio
+async def test_saved_history_roundtrip_clear_and_busy_guard(tmp_path):
+    settings = Settings(gemini_api_key="", groq_api_key="")
+    settings.logging.file = tmp_path / "jarvis.log"
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text('{"role":"user","text":"Saved telescope preference"}\n')
+    history = ConversationManager(storage_path=tmp_path / "history.sqlite3", transcript=transcript)
+    session = SimpleNamespace(
+        settings=settings, router=SimpleNamespace(providers={}), memory=None, conversation=history
+    )
+    server = WebSocketServer(session, port=0)
+    server._update_world_data_loop = AsyncMock()
+    await server.start()
+    try:
+        async with websockets.connect(
+            f"ws://127.0.0.1:{server.port}/?token={server.auth_token}"
+        ) as ws:
+            await ws.recv()
+            await ws.send(json.dumps({"type": "get_history"}))
+            result = json.loads(await ws.recv())
+            assert result["messages"] == [{"role": "user", "text": "Saved telescope preference"}]
+            async with server._chat_lock:
+                await ws.send(json.dumps({"type": "clear_history"}))
+                assert json.loads(await ws.recv())["type"] == "error"
+                assert transcript.exists()
+            await ws.send(json.dumps({"type": "clear_history"}))
+            assert json.loads(await ws.recv())["type"] == "history_cleared"
+            assert not transcript.exists()
+            await ws.send(json.dumps({"type": "get_history"}))
+            assert json.loads(await ws.recv())["messages"] == []
+            restarted = ConversationManager(
+                storage_path=tmp_path / "history.sqlite3", transcript=transcript
+            )
+            restarted.add_user_message("Remember telescope preference?")
+            assert "Saved telescope preference" not in str(restarted.get_context_messages())
+    finally:
+        await server.stop()

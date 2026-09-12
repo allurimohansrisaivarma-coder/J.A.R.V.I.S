@@ -1,0 +1,58 @@
+JARVIS 0.2.7 - Windows
+
+1. Extract the whole ZIP, then open JARVIS.exe in the extracted folder.
+   Keep the _internal folder beside the executable.
+
+2. If setup is required, open Settings, enter a Groq and/or Gemini API key,
+   click SAVE API KEYS, then close and reopen JARVIS.
+   A Groq key enables chat, speech recognition, and fast screen reading.
+   Gemini provides additional reasoning, screen fallback, and browser tools.
+   Keys entered in Settings are encrypted for your Windows account.
+
+3. Type a message, or hold the mic button while talking and release to send.
+   SCREEN reads the visible desktop. STOP or Escape interrupts a reply.
+   Screen capture requires an unlocked Windows desktop. Keep the target
+   window visible. Windows may block protected content.
+
+4. Press Ctrl+Alt+J to switch to the compact circular reactor or restore
+   the full HUD. Click the orb center to reopen JARVIS; drag its outer ring
+   to move it. Ctrl+Alt+D toggles optional full click-through mode. If you
+   enable click-through, press Ctrl+Alt+D again or Ctrl+Alt+J to reopen.
+   Ctrl+Alt+R reads the screen; Ctrl+Alt+X stops a reply.
+   Hold Ctrl+Shift+J to speak from any app (customize in Settings).
+
+Internet is required for AI responses and speech recognition. If online
+speech output retries the same selected voice when interrupted. If that
+voice remains unavailable, the response continues in text without switching
+to a different voice. Source URLs stay in chat and are never spoken.
+Formatting-only chunks are skipped, and isolated synthesis failures no longer
+silence the remaining response. Ryan retries up to four times without changing
+voice. Longer replies use fewer, smoother synthesis requests.
+
+Preferences and logs are stored in %LOCALAPPDATA%\JARVIS.
+Calendar and Gmail require separate Google OAuth setup; see README.md.
+Conversation history saves automatically and is restored on restart.
+Relevant earlier user statements are recalled across conversations.
+Explicit "remember that..." requests receive priority in later context.
+Clear saved conversations in Settings when needed. Optional pinned facts
+use a separate memory store that is disabled by default.
+
+Live web answers include source links. If reliable evidence cannot be
+retrieved, JARVIS says so instead of guessing.
+
+Daily debrief also recognizes speech variants such as "daily de brief".
+It uses direct publisher feeds first and Google News only as a dated fallback.
+PDFs in approved Desktop, Documents, and Downloads folders can be read when
+you explicitly ask for their contents. Paths remain visible in chat but are
+not spoken aloud.
+
+To generate a troubleshooting report, run from a terminal:
+  .\JARVIS.exe --diagnose report.json
+Add --online to test the AI providers using a generated test image.
+Diagnostics never upload your desktop.
+
+DAILY DEBRIEF
+Ask "Give me my daily debrief" for freshly retrieved publisher headlines.
+Only reports published within the past 24 hours are included. Each headline
+links to its source and shows its publication time. Unavailable categories
+are identified; old news and model-generated claims are not substituted.
